@@ -21,3 +21,65 @@ examples/**/eval_*
 
 /.vscode
 /*.session.sql
+
+# Environment files
+.env
+.env.local
+.env.test
+.env.*
+
+# Credentials and secrets
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!.claude/settings.local.json
+employee-access-drive-data-share-*.json
+
+# Logs
+*.log
+server*.log
+
+# Test files
+test_*.py
+tests/
+
+# Database files
+*.sql
+!supabase_schema.sql
+!contextual_retrieval_schema.sql
+
+# Temporary files
+nul
+.playwright-mcp/
+
+# Node modules
+node_modules/
+frontend/node_modules/
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Python
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Build outputs
+build/
+dist/
+*.egg-info/

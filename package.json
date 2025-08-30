@@ -1,0 +1,28 @@
+{
+  "name": "cocoindex-ingestion-portal",
+  "version": "0.1.0",
+  "description": "Data Ingestion Portal with CocoIndex Integration",
+  "scripts": {
+    "test": "pytest tests/",
+    "test:unit": "pytest tests/unit/ -v",
+    "test:integration": "pytest tests/integration/ -v",
+    "test:e2e": "pytest tests/e2e/ -v",
+    "test:watch": "pytest-watch tests/",
+    "test:coverage": "pytest --cov=app --cov-report=html --cov-report=term tests/",
+    "test:quick": "pytest tests/unit/ -v --tb=short",
+    "test:debug": "pytest tests/ -vv --tb=long",
+    "test:mark": "pytest -m",
+    "frontend:dev": "cd frontend && npm run dev",
+    "backend:dev": "uvicorn app.main:app --reload --port 8001",
+    "celery:dev": "python -m celery -A app.worker worker --loglevel=info",
+    "redis:start": "redis-server",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "dev": "concurrently \"npm run backend:dev\" \"npm run frontend:dev\" \"npm run celery:dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^7.6.0"
+  },
+  "author": "",
+  "license": "MIT"
+}
