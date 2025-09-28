@@ -1,16 +1,33 @@
 """
 Document Management API Endpoints
 """
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
-from typing import List, Optional
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body
+from fastapi.responses import StreamingResponse
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from uuid import UUID
 import logging
+import asyncio
+import json
 
 from app.services.supabase_service import SupabaseService
-from app.services.document_processor import DocumentProcessor
+from app.models.job import ProcessingJob, JobType, JobStatus
 from app.models.document import Document, DocumentState
 from app.config import settings
+from app.flows.entity_extraction_runner_v2 import run_extract_mentions, ChunkInput
+from app.models.entity_v2 import EntityMention, CanonicalEntity
+from pydantic import BaseModel, Field
+
+from app.api.schemas import (
+    DocumentListItem,
+    DocumentDetail,
+    DocumentUpdateRequest,
+    ExtractMetadataResponse,
+    DocumentProcessResponse,
+    ChunkOut,
+    ErrorResponse,
+    OperationResponse,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -18,7 +35,24 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 # IMPORTANT: Specific routes must come before parameterized routes
 # This test endpoint must be defined before /{document_id}
 
-@router.get("/", response_model=List[dict])
+
+class ProcessDocumentRequest(BaseModel):
+    force_reprocess: bool = False
+
+
+class DocumentRelationshipCreate(BaseModel):
+    source_entity_id: str = Field(..., description="Canonical entity id for the source")
+    target_entity_id: str = Field(..., description="Canonical entity id for the target")
+    relationship_type: str = Field(..., description="Relationship label")
+    confidence_score: Optional[float] = Field(1.0, ge=0.0, le=1.0)
+    metadata: Optional[Dict[str, Any]] = None
+
+@router.get(
+    "/",
+    response_model=List[DocumentListItem],
+    summary="List documents",
+    description="List documents with optional filters for status and source. Returns counts for chunks and entities.",
+)
 async def list_documents(
     status: Optional[str] = Query(None, description="Filter by status"),  # Fixed: Changed from DocumentStatus to str
     source: Optional[str] = Query(None, description="Filter by source type"),
@@ -28,19 +62,13 @@ async def list_documents(
     """
     List all documents with optional filtering - using Supabase directly
     """
-    logger.info(f"=== LIST DOCUMENTS ENDPOINT CALLED ===")
-    logger.info(f"Parameters: status={status}, source={source}, limit={limit}, offset={offset}")
-    
     try:
-        logger.info(f"Creating SupabaseService instance...")
-        # Use Supabase service instead of SQLAlchemy
+        # Use Supabase service with singleton client
         supabase_service = SupabaseService()
-        logger.info(f"SupabaseService instance created successfully")
         
         # Get documents from Supabase
-        logger.info(f"Calling list_documents on SupabaseService...")
         documents = supabase_service.list_documents(status=status, limit=limit)
-        logger.info(f"Retrieved {len(documents)} documents from Supabase")
+        logger.debug(f"Retrieved {len(documents)} documents from Supabase")
         
         # Filter by source if provided
         if source:
@@ -53,6 +81,43 @@ async def list_documents(
         # Convert to dict format expected by frontend
         result = []
         for doc in documents:
+            # Get chunk count for this document
+            chunk_count = 0
+            try:
+                # Direct count from chunks table (avoid missing helper)
+                cnt = supabase_service.client.table("chunks").select("id", count="exact").eq("document_id", str(doc.id)).execute()
+                chunk_count = int(getattr(cnt, 'count', 0) or 0)
+            except Exception as e:
+                logger.warning(f"Failed to get chunk count for document {doc.id}: {e}")
+            
+            # Get entity count for this document
+            entity_count = 0
+            try:
+                # Count ALL entity mentions for this document (not just canonicalized ones)
+                # This matches what the detail page shows
+                res = supabase_service.client.table("entity_mentions").select("id", count="exact").eq("document_id", str(doc.id)).execute()
+                entity_count = int(getattr(res, 'count', 0) or 0)
+
+                # Log if many mentions lack canonical assignment (for monitoring)
+                if entity_count > 0:
+                    canonical_res = supabase_service.client.table("entity_mentions").select("canonical_entity_id").eq("document_id", str(doc.id)).not_.is_("canonical_entity_id", "null").execute()
+                    canonical_count = len({row.get("canonical_entity_id") for row in (canonical_res.data or []) if row.get("canonical_entity_id")})
+                    if canonical_count < entity_count * 0.5:  # Less than 50% canonicalized
+                        logger.info(f"Document {doc.id}: {entity_count} mentions but only {canonical_count} canonicalized")
+            except Exception as e:
+                logger.warning(f"Failed to get entity count for document {doc.id}: {e}")
+            
+            # Check metadata completeness
+            metadata = doc.metadata if hasattr(doc, 'metadata') else {}
+            metadata_complete = False
+            if metadata:
+                # Check if key metadata fields are present and non-empty
+                required_fields = ['title', 'author', 'summary', 'key_topics']
+                metadata_complete = all(
+                    field in metadata and metadata.get(field) and str(metadata.get(field)).strip()
+                    for field in required_fields
+                )
+            
             doc_dict = {
                 "id": str(doc.id),
                 "title": doc.name,  # Map name to title for frontend compatibility
@@ -61,12 +126,13 @@ async def list_documents(
                 "source_id": doc.source_id,
                 "source_url": doc.source_url if hasattr(doc, 'source_url') else None,
                 "status": doc.status.value if hasattr(doc.status, 'value') else doc.status,
-                "metadata": doc.metadata if hasattr(doc, 'metadata') else {},
+                "metadata": metadata,
+                "metadata_complete": metadata_complete,
                 "created_at": doc.created_at.isoformat() if doc.created_at else None,
                 "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
                 "processed_at": doc.processed_at.isoformat() if doc.processed_at else None,
-                "chunk_count": 0,  # TODO: Fix chunk count query
-                "entity_count": 0  # TODO: Fix entity count query
+                "chunk_count": chunk_count,
+                "entity_count": entity_count
             }
             result.append(doc_dict)
         
@@ -79,7 +145,113 @@ async def list_documents(
         return []
 
 
-@router.get("/{document_id}/chunks", response_model=list)
+@router.get(
+    "/{document_id}/progress",
+    summary="Stream processing progress",
+    description="Server-Sent Events stream with step-by-step processing progress for a document.",
+)
+async def stream_document_progress(document_id: str):
+    """
+    Stream real-time processing progress updates for a document via Server-Sent Events (SSE).
+    This includes step-by-step progress with time elapsed for each step.
+    """
+    from app.services.progress_tracker import ProgressTracker
+    
+    # Queue for in-process progress updates (legacy/simple path); Celery emits via DB polling below
+    progress_queue = asyncio.Queue()
+    supabase_service = SupabaseService()
+    
+    # Identify latest job for this document (if any)
+    try:
+        jobs = supabase_service.get_document_jobs(document_id)
+        current_job = jobs[0] if jobs else None
+    except Exception:
+        current_job = None
+    
+    async def generate():
+        """Generate SSE events with processing progress updates"""
+        try:
+            # Send initial event
+            yield f"data: {json.dumps({'event': 'connected', 'document_id': document_id})}\n\n"
+            
+            # Listen for progress updates (in-process) and always poll job status for Celery-driven runs
+            timeout_counter = 0
+            max_timeouts = 30  # 30 seconds without updates
+            
+            while timeout_counter < max_timeouts:
+                try:
+                    # Wait for progress update with timeout
+                    progress_data = await asyncio.wait_for(progress_queue.get(), timeout=1.0)
+                    
+                    # Send progress event
+                    yield f"data: {json.dumps(progress_data)}\n\n"
+                    
+                    # Check if processing is complete
+                    if progress_data.get('percentage') == 100 or progress_data.get('status') in ['success', 'failed']:
+                        yield f"data: {json.dumps({'event': 'complete', 'final_status': progress_data.get('status', 'completed')})}\n\n"
+                        break
+                    
+                    timeout_counter = 0  # Reset timeout counter
+                    
+                except asyncio.TimeoutError:
+                    timeout_counter += 1
+                    # Also poll job status and stream it (works across Celery processes)
+                    try:
+                        nonlocal_job = current_job
+                        if not nonlocal_job:
+                            jobs = supabase_service.get_document_jobs(document_id)
+                            nonlocal_job = jobs[0] if jobs else None
+                        if nonlocal_job:
+                            job = supabase_service.get_job(nonlocal_job.id)
+                            if job:
+                                job_event = {
+                                    "event": "job_update",
+                                    "document_id": document_id,
+                                    "job_id": job.id,
+                                    "status": job.job_status.value if hasattr(job.job_status, 'value') else job.job_status,
+                                    "progress": job.progress,
+                                    "current_step": job.current_step,
+                                }
+                                yield f"data: {json.dumps(job_event)}\n\n"
+                    except Exception:
+                        pass
+                    # Send heartbeat to keep connection alive periodically
+                    if timeout_counter % 5 == 0:
+                        yield f"data: {json.dumps({'event': 'heartbeat', 'document_id': document_id})}\n\n"
+                    
+            if timeout_counter >= max_timeouts:
+                yield f"data: {json.dumps({'event': 'timeout', 'message': 'No updates received for 30 seconds'})}\n\n"
+                
+        except Exception as e:
+            logger.error(f"Error in progress stream for document {document_id}: {e}")
+            yield f"data: {json.dumps({'event': 'error', 'message': str(e)})}\n\n"
+    
+    # Store the queue for this document so the processor can send updates
+    tracker = ProgressTracker()
+    tracker.register_queue(document_id, progress_queue)
+    
+    try:
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"  # Disable nginx buffering
+            }
+        )
+    finally:
+        # Clean up queue when connection closes
+        tracker.unregister_queue(document_id)
+
+
+@router.get(
+    "/{document_id}/chunks",
+    response_model=List[ChunkOut],
+    summary="Get document chunks",
+    description="Fetch all chunks for a document. Optionally include surrounding content for each chunk.",
+    responses={500: {"model": ErrorResponse}},
+)
 async def get_document_chunks(
     document_id: UUID,
     include_context: bool = Query(False, description="Include surrounding text context"),
@@ -153,7 +325,13 @@ async def get_document_chunks(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{document_id}", response_model=dict)
+@router.get(
+    "/{document_id}",
+    response_model=DocumentDetail,
+    summary="Get a document",
+    description="Fetch a document with its chunks and entities.",
+    responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
 async def get_document(
     document_id: UUID,
     include_chunks: bool = Query(True, description="Include document chunks"),
@@ -167,8 +345,9 @@ async def get_document(
         supabase_service = SupabaseService()
         
         # Get document from Supabase
-        doc_response = supabase_service.client.table("documents").select("*").eq("id", str(document_id)).single().execute()
-        document = doc_response.data if doc_response.data else None
+        doc_response = supabase_service.client.table("documents").select("*").eq("id", str(document_id)).execute()
+        documents = doc_response.data if doc_response.data else []
+        document = documents[0] if documents else None
         
         if not document:
             raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
@@ -204,9 +383,10 @@ async def get_document(
             result["chunks"] = [
                 {
                     "id": str(chunk.get("id")),
-                    "chunk_number": chunk.get("chunk_index", 0),  # Map to frontend expected field
-                    "text": chunk.get("chunk_text", ""),
-                    "size": chunk.get("chunk_size", 0),
+                    "chunk_number": chunk.get("chunk_index", 0),  # Keep legacy compatibility
+                    "chunk_index": chunk.get("chunk_index", 0),
+                    "chunk_text": chunk.get("chunk_text", ""),
+                    "chunk_size": chunk.get("chunk_size", 0),
                     "start_position": chunk.get("start_position", 0),
                     "end_position": chunk.get("end_position", 0),
                     "metadata": chunk.get("metadata") or {}
@@ -216,21 +396,59 @@ async def get_document(
         
         # Add entities if requested
         if include_entities:
-            entities_response = supabase_service.client.table("entities").select("*").eq(
+            entities_response = supabase_service.client.table("entity_mentions").select("*").eq(
                 "document_id", str(document_id)
             ).execute()
             entities = entities_response.data if entities_response.data else []
-            
-            result["entities"] = [
-                {
-                    "id": str(entity.get("id")),
-                    "name": entity.get("name"),
-                    "type": entity.get("type"),
-                    "confidence": entity.get("confidence", 1.0),
-                    "metadata": entity.get("metadata") or {}
-                }
+
+            canonical_ids = sorted({
+                str(entity.get("canonical_entity_id"))
                 for entity in entities
-            ]
+                if entity.get("canonical_entity_id")
+            })
+            canonical_details: dict[str, dict] = {}
+            if canonical_ids:
+                canonical_resp = (
+                    supabase_service.client.table("canonical_entities")
+                    .select("id,name,type,metadata")
+                    .in_("id", canonical_ids)
+                    .execute()
+                )
+                canonical_details = {
+                    str(row.get("id")): row
+                    for row in (canonical_resp.data or [])
+                    if row.get("id") is not None
+                }
+
+            enriched_entities = []
+            for entity in entities:
+                cid = str(entity.get("canonical_entity_id")) if entity.get("canonical_entity_id") else None
+                canonical_info = canonical_details.get(cid) if cid else None
+                base_metadata = entity.get("metadata") or {}
+                attributes = entity.get("attributes") or base_metadata.get("attributes")
+                metadata = dict(base_metadata) if isinstance(base_metadata, dict) else {}
+                if attributes and "attributes" not in metadata:
+                    metadata["attributes"] = attributes
+
+                entity_type = None
+                if canonical_info and canonical_info.get("type"):
+                    entity_type = canonical_info.get("type")
+                else:
+                    entity_type = entity.get("entity_type") or entity.get("type")
+
+                enriched_entities.append({
+                    "id": str(entity.get("id")),
+                    "entity_name": entity.get("entity_name") or entity.get("name"),
+                    "entity_type": entity_type,
+                    "confidence_score": entity.get("confidence_score", entity.get("confidence", 1.0)),
+                    "metadata": metadata,
+                    "canonical_entity_id": cid,
+                    "canonical_name": canonical_info.get("name") if canonical_info else None,
+                    "canonical_type": canonical_info.get("type") if canonical_info else None,
+                    "canonical_metadata": canonical_info.get("metadata") if canonical_info else None,
+                })
+
+            result["entities"] = enriched_entities
         
         logger.info(f"Retrieved document {document_id}")
         return result
@@ -242,7 +460,223 @@ async def get_document(
         raise HTTPException(status_code=500, detail="An error occurred")
 
 
-@router.delete("/{document_id}")
+@router.get(
+    "/{document_id}/entities",
+    summary="Get document entities (Supabase)",
+    description="Fetch all entities for a document from Supabase in standardized shape.",
+)
+async def get_document_entities(document_id: UUID):
+    try:
+        supabase_service = SupabaseService()
+        entities_response = supabase_service.client.table("entity_mentions").select("*").eq(
+            "document_id", str(document_id)
+        ).execute()
+        entities = entities_response.data or []
+
+        canonical_ids = sorted({
+            str(entity.get("canonical_entity_id"))
+            for entity in entities
+            if entity.get("canonical_entity_id")
+        })
+        canonical_details: dict[str, dict] = {}
+        if canonical_ids:
+            canonical_resp = (
+                supabase_service.client.table("canonical_entities")
+                .select("id,name,type,metadata")
+                .in_("id", canonical_ids)
+                .execute()
+            )
+            canonical_details = {
+                str(row.get("id")): row
+                for row in (canonical_resp.data or [])
+                if row.get("id") is not None
+            }
+
+        normalized = []
+        for e in entities:
+            cid = str(e.get("canonical_entity_id")) if e.get("canonical_entity_id") else None
+            canonical_info = canonical_details.get(cid) if cid else None
+            base_metadata = e.get("metadata") or {}
+            attributes = e.get("attributes") or (base_metadata.get("attributes") if isinstance(base_metadata, dict) else None)
+            metadata = dict(base_metadata) if isinstance(base_metadata, dict) else {}
+            if attributes and "attributes" not in metadata:
+                metadata["attributes"] = attributes
+
+            entity_type = None
+            if canonical_info and canonical_info.get("type"):
+                entity_type = canonical_info.get("type")
+            else:
+                entity_type = e.get("entity_type") or e.get("type")
+
+            item = {
+                "id": str(e.get("id")),
+                "document_id": str(e.get("document_id")),
+                "entity_name": e.get("entity_name") or e.get("name") or e.get("text"),  # Also check 'text' field
+                "entity_type": entity_type,
+                "confidence_score": e.get("confidence_score", e.get("confidence", 1.0)),
+                "metadata": metadata,
+                "canonical_entity_id": cid,
+                "canonical_name": canonical_info.get("name") if canonical_info else None,
+                "canonical_type": canonical_info.get("type") if canonical_info else None,
+                "canonical_metadata": canonical_info.get("metadata") if canonical_info else None,
+            }
+            # Add context if available (from entity_mentions table)
+            if e.get("context"):
+                item["context"] = e.get("context")
+            # Legacy alias for frontend/tests expecting 'confidence'
+            item["confidence"] = item["confidence_score"]
+            normalized.append(item)
+
+        return normalized
+    except Exception as e:
+        logger.error(f"Error getting entities for document {document_id}: {e}")
+        return []
+
+
+@router.get(
+    "/{document_id}/relationship-proposals",
+    summary="List relationship proposals",
+    description="Fetch unverified relationship proposals for a document with optional type and confidence filters.",
+)
+async def get_relationship_proposals(
+    document_id: UUID,
+    type: Optional[str] = Query(None, description="Filter by relationship_type label"),
+    min_conf: float = Query(0.0, ge=0.0, le=1.0, description="Minimum confidence_score")
+):
+    try:
+        supabase_service = SupabaseService()
+        client = supabase_service.client
+        # Get canonical ids present via mentions for this doc
+        mentions = client.table("entity_mentions").select("canonical_entity_id").eq("document_id", str(document_id)).neq("canonical_entity_id", None).execute()
+        ids = [m.get("canonical_entity_id") for m in (mentions.data or []) if m.get("canonical_entity_id")]
+        if not ids:
+            return []
+        ent_ids = list(set(ids))
+
+        # Fetch proposals where BOTH ends are in this doc's canonical ids and is not validated
+        rels = client.table("canonical_relationships").select("*")\
+            .in_("source_entity_id", ent_ids)\
+            .in_("target_entity_id", ent_ids)\
+            .eq("is_validated", False)\
+            .execute()
+
+        combined = rels.data or []
+
+        # Optional filters
+        if type:
+            combined = [r for r in combined if str(r.get("relationship_type", "")).upper() == type.upper()]
+        if min_conf:
+            def _conf(x):
+                v = x.get("confidence_score")
+                try:
+                    return float(v or 0.0)
+                except Exception:
+                    return 0.0
+            combined = [r for r in combined if _conf(r) >= min_conf]
+
+        return combined
+    except Exception as e:
+        logger.error(f"Error fetching relationship proposals for {document_id}: {e}")
+        return []
+
+
+@router.get(
+    "/{document_id}/relationships",
+    summary="List document relationships",
+    description="Fetch canonical relationships associated with a document (both proposed and verified).",
+)
+async def get_document_relationships(document_id: UUID):
+    supabase_service = SupabaseService()
+    try:
+        relationships = supabase_service.get_document_relationships(str(document_id))
+
+        # Collect all unique entity IDs
+        entity_ids = set()
+        for rel in relationships:
+            if rel.get("source_entity_id"):
+                entity_ids.add(rel["source_entity_id"])
+            if rel.get("target_entity_id"):
+                entity_ids.add(rel["target_entity_id"])
+
+        # Fetch canonical entities for these IDs
+        entity_map = {}
+        if entity_ids:
+            try:
+                logger.info(f"Fetching canonical entities for {len(entity_ids)} IDs")
+                entities_response = supabase_service.client.table("canonical_entities").select("id, name, type").in_("id", list(entity_ids)).execute()
+                logger.info(f"Got {len(entities_response.data or [])} canonical entities")
+                for entity in (entities_response.data or []):
+                    entity_map[entity["id"]] = entity
+                    logger.debug(f"Mapped entity {entity['id'][:8]}... -> {entity['name']}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch canonical entities for relationship enrichment: {e}")
+
+        # Enrich relationships with entity names from canonical_entities
+        for rel in relationships:
+            metadata = rel.get("metadata", {}) or {}
+            # Expose raw_relationship_type at the top level if it exists
+            if "raw_relationship_type" in metadata:
+                rel["raw_relationship_type"] = metadata["raw_relationship_type"]
+
+            # Add entity names
+            source_id = rel.get("source_entity_id")
+            target_id = rel.get("target_entity_id")
+
+            if source_id and source_id in entity_map:
+                rel["source_entity_name"] = entity_map[source_id]["name"]
+                rel["source_entity_type"] = entity_map[source_id]["type"]
+            else:
+                # Fallback to metadata if available
+                rel["source_entity_name"] = metadata.get("source_name", None)
+
+            if target_id and target_id in entity_map:
+                rel["target_entity_name"] = entity_map[target_id]["name"]
+                rel["target_entity_type"] = entity_map[target_id]["type"]
+            else:
+                # Fallback to metadata if available
+                rel["target_entity_name"] = metadata.get("target_name", None)
+
+        return relationships
+    except Exception as exc:
+        logger.error("Error fetching relationships for document %s: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch document relationships")
+
+
+@router.post(
+    "/{document_id}/relationships",
+    summary="Create document relationship",
+    description="Create a canonical relationship tied to a document.",
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
+async def create_document_relationship(document_id: UUID, payload: DocumentRelationshipCreate):
+    if payload.source_entity_id == payload.target_entity_id:
+        raise HTTPException(status_code=400, detail="Source and target must differ")
+
+    supabase_service = SupabaseService()
+
+    try:
+        record = supabase_service.create_document_relationship(
+            str(document_id),
+            source_entity_id=payload.source_entity_id,
+            target_entity_id=payload.target_entity_id,
+            relationship_type=payload.relationship_type,
+            confidence_score=float(payload.confidence_score or 0.0),
+            metadata=payload.metadata,
+        )
+        return record
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to create relationship for document %s: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to create relationship")
+
+
+@router.delete(
+    "/{document_id}",
+    summary="Delete a document",
+    description="Soft delete by default. Optionally perform a hard delete of the document and related data.",
+    responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
 async def delete_document(
     document_id: UUID,
     hard_delete: bool = Query(False, description="Permanently delete (vs soft delete)")
@@ -263,7 +697,7 @@ async def delete_document(
         if hard_delete:
             # Delete related data first (foreign key constraints)
             supabase_service.client.table("chunks").delete().eq("document_id", str(document_id)).execute()
-            supabase_service.client.table("entities").delete().eq("document_id", str(document_id)).execute()
+            supabase_service.client.table("entity_mentions").delete().eq("document_id", str(document_id)).execute()
             
             # Delete document
             supabase_service.client.table("documents").delete().eq("id", str(document_id)).execute()
@@ -271,9 +705,9 @@ async def delete_document(
             logger.info(f"Hard deleted document {document_id}")
             return {"message": f"Document {document_id} permanently deleted"}
         else:
-            # Soft delete - just update status
+            # Soft delete - just update status to REJECTED (since DELETED causes constraint violation)
             supabase_service.client.table("documents").update({
-                "status": "deleted",
+                "status": DocumentState.REJECTED.value,
                 "updated_at": datetime.utcnow().isoformat()
             }).eq("id", str(document_id)).execute()
             
@@ -310,27 +744,55 @@ async def reprocess_document(
         if not document:
             raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
         
-        # Update status
-        supabase_service.client.table("documents").update({
-            "status": "processing",
-            "updated_at": datetime.utcnow().isoformat()
-        }).eq("id", str(document_id)).execute()
-        
-        # Queue background processing
-        background_tasks.add_task(
-            reprocess_document_task,
-            document_id=str(document_id),
-            reparse=reparse,
-            rechunk=rechunk,
-            reextract=reextract,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
-        )
-        
-        logger.info(f"Queued reprocessing for document {document_id}")
+        # Create a ProcessingJob for reprocess
+        from app.models.job import ProcessingJob, JobType, JobStatus
+        job = ProcessingJob(document_id=str(document_id), job_type=JobType.FULL_PIPELINE)
+        job = supabase_service.create_job(job)
+
+        # Update status to processing
+        supabase_service.update_document_status(str(document_id), DocumentState.PROCESSING)
+
+        # Enqueue Celery processing (reuse full pipeline)
+        try:
+            from app.tasks.document_tasks import process_document
+            try:
+                async_result = process_document.apply_async(
+                    args=[str(document_id), job.id],
+                    kwargs={"force_reprocess": True},
+                )
+            except TypeError as exc_kwargs:
+                if "force_reprocess" in str(exc_kwargs):
+                    logger.warning(
+                        "process_document task rejected force_reprocess kwarg during reprocess; falling back to positional args: %s",
+                        exc_kwargs,
+                    )
+                    try:
+                        async_result = process_document.apply_async(
+                            args=[str(document_id), job.id, True],
+                        )
+                    except TypeError as exc_args:
+                        logger.warning(
+                            "process_document task rejected positional force_reprocess during reprocess; falling back to legacy invocation: %s",
+                            exc_args,
+                        )
+                        async_result = process_document.apply_async(
+                            args=[str(document_id), job.id]
+                        )
+                else:
+                    raise
+
+            supabase_service.update_job(job.id, {"celery_task_id": async_result.id, "job_status": "running", "current_step": "Queued for reprocessing", "progress": 1})
+            logger.info(f"Queued reprocessing via Celery for document {document_id} (job {job.id}, task {async_result.id})")
+        except Exception as e:
+            logger.error(f"Failed to queue Celery reprocess task: {e}")
+            supabase_service.update_job(job.id, {"job_status": "failed", "error_message": str(e)})
+            supabase_service.update_document_status(str(document_id), DocumentState.FAILED, error=str(e))
+            raise HTTPException(status_code=500, detail="Failed to queue reprocessing task")
+
         return {
             "message": f"Document {document_id} queued for reprocessing",
-            "job_id": f"reprocess_{document_id}_{datetime.utcnow().timestamp()}"
+            "job_id": job.id,
+            "celery_task_id": async_result.id
         }
         
     except HTTPException:
@@ -340,10 +802,16 @@ async def reprocess_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/{document_id}")
+@router.put(
+    "/{document_id}",
+    response_model=OperationResponse,
+    summary="Update a document",
+    description="Update document fields and/or merge metadata. Use this to set status, author, or metadata fields.",
+    responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
 async def update_document(
     document_id: UUID,
-    update_data: dict
+    update_data: DocumentUpdateRequest
 ):
     """
     Update document fields including metadata - using Supabase directly
@@ -362,34 +830,52 @@ async def update_document(
         updates = {}
         
         # Handle metadata specifically - always merge unless explicitly set to replace
-        if "metadata" in update_data:
+        payload = update_data.dict(exclude_unset=True)
+
+        if "metadata" in payload:
             existing_metadata = document.get("metadata", {}) or {}
-            new_metadata = update_data["metadata"]
+            new_metadata = payload["metadata"] or {}
             
             # Extract special fields that may be in metadata
             if "author" in new_metadata:
                 updates["author"] = new_metadata.pop("author")
             if "mime_type" in new_metadata:
                 updates["mime_type"] = new_metadata.pop("mime_type")
-            
+            if "security_level" in new_metadata:
+                updates["security_level"] = new_metadata.pop("security_level")
+            if "access_level" in new_metadata:
+                updates["access_level"] = new_metadata.pop("access_level")
+
             # Merge remaining metadata
             updates["metadata"] = {**existing_metadata, **new_metadata}
         
         # Handle other direct fields
-        for field in ["title", "name", "author", "mime_type", "status"]:
-            if field in update_data:
-                updates[field] = update_data[field]
-        
+        for field in ["title", "name", "author", "mime_type", "status", "security_level", "access_level"]:
+            if field in payload:
+                updates[field] = payload[field]
+
+        # Map title to name for storage if provided
+        if "title" in payload and "name" not in updates:
+            updates["name"] = payload["title"]
+
+        # If security_level is updated, also update access_level
+        if "security_level" in updates:
+            security_mapping = {
+                "public": 1,
+                "client": 2,
+                "partner": 3,
+                "employee": 4,
+                "management": 5
+            }
+            updates["access_level"] = security_mapping.get(updates["security_level"], 1)
+
         updates["updated_at"] = datetime.utcnow().isoformat()
         
         # Update document
         supabase_service.client.table("documents").update(updates).eq("id", str(document_id)).execute()
         
         logger.info(f"Updated document {document_id} with fields: {list(updates.keys())}")
-        return {
-            "message": f"Document {document_id} updated successfully",
-            "updated_fields": list(updates.keys())
-        }
+        return {"message": f"Document {document_id} updated successfully"}
         
     except HTTPException:
         raise
@@ -398,7 +884,12 @@ async def update_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/{document_id}/metadata")
+@router.put(
+    "/{document_id}/metadata",
+    response_model=OperationResponse,
+    summary="Update document metadata",
+    description="Convenience endpoint to update document metadata only.",
+)
 async def update_metadata(
     document_id: UUID,
     metadata: dict,
@@ -411,7 +902,12 @@ async def update_metadata(
     return await update_document(document_id, {"metadata": metadata})
 
 
-@router.post("/{document_id}/extract-metadata")
+@router.post(
+    "/{document_id}/extract-metadata",
+    response_model=ExtractMetadataResponse,
+    summary="Extract metadata",
+    description="Run AI metadata extraction for a document (async background).",
+)
 async def extract_metadata(
     document_id: UUID,
     background_tasks: BackgroundTasks
@@ -458,7 +954,11 @@ async def extract_metadata(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{document_id}/suggested-metadata")
+@router.get(
+    "/{document_id}/suggested-metadata",
+    summary="Get suggested metadata",
+    description="Retrieve previously AI-extracted metadata suggestions for a document.",
+)
 async def get_suggested_metadata(document_id: UUID):
     """
     Get AI-suggested metadata for a document
@@ -506,16 +1006,31 @@ async def get_suggested_metadata(document_id: UUID):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/{document_id}/process")
+@router.post(
+    "/{document_id}/process",
+    response_model=DocumentProcessResponse,
+    summary="Trigger document processing",
+    description="Start processing for a document: chunking, embeddings, and entity extraction with progress streaming available.",
+)
 async def trigger_document_processing(
     document_id: UUID,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    request: ProcessDocumentRequest = Body(
+        default=ProcessDocumentRequest(),
+        description="Processing options including force reprocess flag",
+    ),
 ):
     """
     Trigger processing for a specific document.
     This will chunk the document, extract entities, and generate embeddings.
     """
-    logger.info(f"Processing endpoint called for document: {document_id}")
+    force_reprocess = request.force_reprocess if request else False
+    logger.info(
+        "Processing endpoint called for %s force_reprocess=%s request=%s",
+        document_id,
+        force_reprocess,
+        request.dict() if request else None,
+    )
     try:
         # Verify document exists using Supabase
         supabase_service = SupabaseService()
@@ -524,32 +1039,95 @@ async def trigger_document_processing(
             raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
         
         # Check if document is in a state that can be processed
-        valid_states = ["discovered", "failed"]
-        if document.status not in valid_states:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Document cannot be processed from status: {document.status}"
-            )
-        
-        # Update status to processing
-        supabase_service.update_document(
-            str(document_id),
-            {"status": "processing"}
-        )
-        
-        # Queue the processing task - pass document as dict for serialization
-        background_tasks.add_task(
-            process_document_pipeline,
-            document_id=str(document_id),
-            document_dict=document.dict() if hasattr(document, 'dict') else document.__dict__
-        )
-        
-        logger.info(f"Queued processing for document {document_id}")
-        
+        if force_reprocess:
+            # Allow reprocessing from any state except processing
+            if document.status == "processing":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Document is currently being processed. Please wait for it to complete."
+                )
+
+            logger.info(f"Force reprocessing: Cleaning up existing data for document {document_id}")
+            try:
+                supabase_service.delete_document_chunks(str(document_id))
+            except Exception as cleanup_err:
+                logger.warning(f"Error deleting chunks: {cleanup_err}")
+
+            try:
+                deleted_mentions = supabase_service.delete_document_entity_mentions(str(document_id))
+                if deleted_mentions:
+                    logger.info(f"Removed {deleted_mentions} existing entity mentions for document {document_id}")
+            except Exception as cleanup_err:
+                logger.warning(f"Error deleting entity mentions: {cleanup_err}")
+
+            try:
+                deleted_relationships = supabase_service.delete_document_relationships(str(document_id))
+                if deleted_relationships:
+                    logger.info(f"Removed {deleted_relationships} canonical relationships for document {document_id}")
+            except Exception as cleanup_err:
+                logger.warning(f"Error deleting relationships: {cleanup_err}")
+        else:
+            # Normal processing - only allow from discovered or failed states
+            valid_states = ["discovered", "failed"]
+            if document.status not in valid_states:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Document cannot be processed from status: {document.status}. Use force_reprocess=true to reprocess."
+                )
+
+
+        # Create a ProcessingJob row in Supabase
+        job = ProcessingJob(document_id=str(document_id), job_type=JobType.FULL_PIPELINE)
+        job = supabase_service.create_job(job)
+
+        # Update document status to processing
+        supabase_service.update_document_status(str(document_id), DocumentState.PROCESSING)
+
+        # Enqueue Celery pipeline (preferred path)
+        try:
+            from app.tasks.document_tasks import process_document
+            try:
+                async_result = process_document.apply_async(
+                    args=[str(document_id), job.id],
+                    kwargs={"force_reprocess": force_reprocess},
+                )
+            except TypeError as exc_kwargs:
+                if "force_reprocess" in str(exc_kwargs):
+                    logger.warning(
+                        "process_document task rejected force_reprocess kwarg; falling back to positional args: %s",
+                        exc_kwargs,
+                    )
+                    try:
+                        async_result = process_document.apply_async(
+                            args=[str(document_id), job.id, force_reprocess],
+                        )
+                    except TypeError as exc_args:
+                        logger.warning(
+                            "process_document task rejected positional force_reprocess; falling back to legacy invocation: %s",
+                            exc_args,
+                        )
+                        async_result = process_document.apply_async(
+                            args=[str(document_id), job.id]
+                        )
+                else:
+                    raise
+
+            # Store Celery task id on the job
+            supabase_service.update_job(job.id, {"celery_task_id": async_result.id, "job_status": "running", "progress": 1, "current_step": "Queued for processing"})
+            logger.info(f"Queued Celery processing for document {document_id} (job {job.id}, task {async_result.id})")
+        except Exception as e:
+            logger.error(f"Failed to queue Celery task: {e}")
+            # Fail the job and revert document status
+            supabase_service.update_job(job.id, {"job_status": "failed", "error_message": str(e)})
+            supabase_service.update_document_status(str(document_id), DocumentState.FAILED, error=str(e))
+            raise HTTPException(status_code=500, detail="Failed to queue processing task")
+
         return {
             "document_id": str(document_id),
             "status": "processing",
-            "message": f"Document processing has been started"
+            "job_id": job.id,
+            "celery_task_id": async_result.id,
+            "message": "Document queued for processing via Celery"
         }
         
     except HTTPException as e:
@@ -560,188 +1138,19 @@ async def trigger_document_processing(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def process_document_pipeline(document_id: str, document_dict: dict):
-    """
-    Process a document through the CocoIndex pipeline
-    Now using the full CocoIndex flow for incremental processing and multi-DB sync
-    """
-    logger.info(f"=== PROCESS_DOCUMENT_PIPELINE CALLED for {document_id} ===")
-    logger.info(f"Using CocoIndex flow for document processing")
-    
-    try:
-        # Import the CocoIndex flow
-        from app.flows.document_processor import create_and_run_flow
-        
-        # Run the CocoIndex flow
-        result = await create_and_run_flow(document_id)
-        
-        if result["status"] == "success":
-            logger.info(f"Successfully processed document {document_id} with CocoIndex")
-            logger.info(f"Created {result['chunks_created']} chunks and {result['entities_extracted']} entities")
-        else:
-            logger.error(f"Failed to process document {document_id}: {result.get('error', 'Unknown error')}")
-            # The flow already updates the document status to FAILED
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error in CocoIndex pipeline: {e}", exc_info=True)
-        
-        # Update document status to failed
-        try:
-            supabase_service = SupabaseService()
-            supabase_service.update_document(
-                document_id,
-                {"status": "failed", "metadata": {"error": str(e)}}
-            )
-        except:
-            pass
-        
-        raise
+## ---------------------------------------------
+## LEGACY (commented out): process_document_pipeline
+## The simple CocoIndex-based pipeline has been removed in favor of Celery.
+## Keeping a placeholder here for reference without executable code.
+## async def process_document_pipeline(document_id: str, document_dict: dict):
+##     pass
 
 
-async def process_document_pipeline_old(document_id: str, document_dict: dict):
-    """
-    DEPRECATED: Old manual processing pipeline - kept for reference
-    This is replaced by the CocoIndex flow above
-    """
-    logger.info(f"=== OLD PROCESS_DOCUMENT_PIPELINE CALLED for {document_id} ===")
-    try:
-        supabase_service = SupabaseService()
-        from app.processors.parser import DocumentParser
-        from app.processors.chunker import DocumentChunker
-        from app.processors.entity_extractor import EntityExtractor
-        
-        logger.info(f"Processing document {document_id}: Starting pipeline...")
-        
-        # Step 1: Extract content using LlamaParse
-        source_type = document_dict.get('source_type', '')
-        source_id = document_dict.get('source_id', '')
-        title = document_dict.get('title', 'Untitled')
-        
-        content = None
-        
-        # Check if document already has content (from scan)
-        if document_dict.get('content'):
-            content = document_dict['content']
-            logger.info(f"Using existing content for document {document_id}")
-        else:
-            # Need to fetch content based on source type
-            if source_type == 'notion':
-                # For Notion, content should have been fetched during scan
-                logger.warning(f"Notion document {document_id} has no content - may need to re-scan")
-                content = f"# {title}\n\nContent needs to be fetched from Notion."
-            elif source_type == 'google_drive':
-                # For Google Drive, we need to download and parse the file
-                logger.info(f"Fetching Google Drive document for parsing: {source_id}")
-                try:
-                    # TODO: Download file from Google Drive and parse with LlamaParse
-                    # For now, use placeholder
-                    parser = DocumentParser()
-                    # This will return test content since file doesn't exist locally
-                    parse_result = await parser.parse_document(
-                        file_path=f"/tmp/{source_id}",  # Placeholder path
-                        tier="balanced"
-                    )
-                    if parse_result["success"]:
-                        content = parse_result["content"]
-                        logger.info(f"Successfully parsed document {document_id}")
-                    else:
-                        content = f"# {title}\n\nFailed to parse document: {parse_result.get('error', 'Unknown error')}"
-                except Exception as e:
-                    logger.error(f"Error parsing document: {e}")
-                    content = f"# {title}\n\nError parsing document: {str(e)}"
-            else:
-                content = f"# {title}\n\nUnknown source type: {source_type}"
-        
-        # Step 2: Chunk the document
-        logger.info(f"Chunking document {document_id}...")
-        chunker = DocumentChunker()
-        from app.models.chunk import ChunkingStrategy
-        chunks = chunker.chunk_text(
-            text=content,
-            strategy=ChunkingStrategy.RECURSIVE,
-            chunk_size=1500,
-            chunk_overlap=200
-        )
-        
-        # Save chunks to database
-        for i, chunk in enumerate(chunks):
-            chunk_data = {
-                "document_id": document_id,
-                "chunk_index": i + 1,  # Changed from chunk_number to chunk_index
-                "chunk_text": chunk["text"],
-                "chunk_size": len(chunk["text"]),
-                "chunking_strategy": "recursive",  # Added required field
-                "metadata": chunk.get("metadata", {})
-            }
-            supabase_service.client.table("chunks").insert(chunk_data).execute()
-        
-        logger.info(f"Created {len(chunks)} chunks for document {document_id}")
-        
-        # Step 3: Extract entities
-        logger.info(f"Extracting entities from document {document_id}...")
-        extractor = EntityExtractor()
-        from app.models.chunk import Chunk
-        # Convert chunks to Chunk objects for entity extractor
-        chunk_objects = [
-            Chunk(
-                id=f"{document_id}_chunk_{i+1}",
-                document_id=document_id,
-                chunk_index=i+1,  # Changed from chunk_number to chunk_index
-                chunk_text=chunk["text"],
-                chunk_size=len(chunk["text"]),
-                chunking_strategy="recursive",
-                metadata=chunk.get("metadata", {})
-            )
-            for i, chunk in enumerate(chunks)
-        ]
-        entities, relationships = extractor.extract(chunk_objects, document_id)
-        
-        # Save entities to database
-        for entity in entities:
-            entity_data = {
-                "document_id": document_id,
-                "entity_type": entity.entity_type.value if hasattr(entity.entity_type, 'value') else str(entity.entity_type),
-                "entity_name": entity.name,
-                "confidence_score": entity.confidence,  # Changed from confidence to confidence_score
-                "metadata": entity.metadata or {}
-            }
-            supabase_service.client.table("entities").insert(entity_data).execute()
-        
-        logger.info(f"Extracted {len(entities)} entities from document {document_id}")
-        
-        # Step 4: Generate embeddings (TODO)
-        # embeddings = generate_embeddings(chunks)
-        
-        # Step 5: Store in vector DB (TODO)
-        # store_in_qdrant(chunks, embeddings)
-        
-        # Step 6: Store entities in Neo4j (TODO)
-        # store_in_neo4j(entities)
-        
-        # Update status to pending_review
-        update_data = {
-            "status": "pending_review",
-            "processed_at": datetime.utcnow().isoformat()
-        }
-        
-        # Store content if it was extracted
-        if content and not document_dict.get('content'):
-            update_data["content"] = content[:10000]  # Store first 10k chars for preview
-        
-        supabase_service.update_document(document_id, update_data)
-        
-        logger.info(f"Document {document_id} processing complete, pending review")
-        
-    except Exception as e:
-        logger.error(f"Error processing document {document_id}: {e}")
-        # Update status to failed
-        supabase_service = SupabaseService()
-        supabase_service.update_document(
-            document_id,
-            {"status": "failed", "processing_error": str(e)}
-        )
+## ---------------------------------------------
+## LEGACY (commented out): process_document_pipeline_old
+## Historical manual pipeline, no longer in use.
+## async def process_document_pipeline_old(document_id: str, document_dict: dict):
+##     pass
 
 
 async def extract_metadata_task(document_id: str):
@@ -751,7 +1160,7 @@ async def extract_metadata_task(document_id: str):
     logger.info(f"Starting metadata extraction task for document {document_id}")
     
     try:
-        from app.flows.metadata_extraction_flow import extract_metadata_for_document
+        from app.services.metadata_extraction import extract_metadata_for_document
         
         # Run the metadata extraction
         result = await extract_metadata_for_document(document_id)
@@ -775,8 +1184,9 @@ async def reprocess_document_task(
     chunk_overlap: Optional[int]
 ):
     """
-    Background task to reprocess a document
+    DEPRECATED: Background task for reprocessing. Use Celery process_document instead.
     """
+    logger.warning("reprocess_document_task is DEPRECATED; forwarding to Celery pipeline.")
     logger.info(f"=== REPROCESS TASK STARTED for document {document_id} ===")
     logger.info(f"Options: reparse={reparse}, rechunk={rechunk}, reextract={reextract}")
     
@@ -811,21 +1221,85 @@ async def reprocess_document_task(
             "doc_metadata": document.get("doc_metadata", {})
         }
         
-        # Call the main processing pipeline
-        logger.info(f"Calling process_document_pipeline for {document_id}")
-        result = await process_document_pipeline(document_id, document_dict)
+        # Queue Celery full pipeline instead of calling the simple flow
+        from app.tasks.document_tasks import process_document
+        from app.models.job import ProcessingJob, JobType, JobStatus
+        job = ProcessingJob(document_id=document_id, job_type=JobType.FULL_PIPELINE)
+        job = supabase_service.create_job(job)
+        async_result = process_document.apply_async(
+            args=[document_id, job.id],
+            kwargs={"force_reprocess": True},
+        )
+        supabase_service.update_job(job.id, {"celery_task_id": async_result.id, "job_status": "running", "current_step": "Queued for reprocessing", "progress": 1})
+        logger.info(f"Queued Celery reprocess task for {document_id} (job {job.id})")
+        return {"status": "queued", "job_id": job.id, "celery_task_id": async_result.id}
         
-        if result and result.get("status") == "success":
+        if False and result and result.get("status") == "success":
             logger.info(f"Successfully reprocessed document {document_id}")
             logger.info(f"Chunks: {result.get('chunks_created', 0)}, Entities: {result.get('entities_extracted', 0)}")
+
+            # Run v2 entity extraction if enabled
+            if settings.entity_pipeline_version == "v2":
+                try:
+                    logger.info(f"Running v2 entity extraction for {document_id}")
+                    # Fetch chunks
+                    chunks = supabase_service.get_document_chunks(document_id)
+                    inputs = [
+                        ChunkInput(id=c.id, document_id=c.document_id, text=c.chunk_text)
+                        for c in chunks
+                    ]
+                    # Create extraction run
+                    run_id = supabase_service.create_extraction_run(
+                        document_id=document_id,
+                        pipeline_version="v2",
+                        model="gpt-4o-mini",
+                    )
+
+                    # Extract mentions
+                    mentions_per_chunk = run_extract_mentions(inputs)
+                    mentions: list[EntityMention] = []
+                    for chunk, mlist in zip(chunks, mentions_per_chunk):
+                        if not mlist:
+                            continue
+                        for m in mlist:
+                            m.document_id = document_id
+                            m.chunk_id = chunk.id
+                            mentions.append(m)
+
+                    # Canonicalize naively by (name,type)
+                    seen: set[tuple[str, str]] = set()
+                    canonicals: list[CanonicalEntity] = []
+                    for m in mentions:
+                        key = (m.text.strip().lower(), m.type)
+                        if key not in seen:
+                            seen.add(key)
+                            canonicals.append(CanonicalEntity(name=m.text.strip(), type=m.type))
+
+                    # Upsert and map ids
+                    canonical_map = supabase_service.upsert_canonical_entities_map(canonicals)
+                    for m in mentions:
+                        key = (m.text.strip().lower(), m.type)
+                        m.canonical_entity_id = canonical_map.get(key)
+
+                    # Insert mentions and complete run
+                    inserted = supabase_service.insert_entity_mentions(mentions, extraction_run_id=run_id)
+                    supabase_service.complete_extraction_run(
+                        run_id,
+                        mentions=len(mentions),
+                        canonical=len(canonical_map),
+                        relationships=0,
+                    )
+                    logger.info(f"v2 extraction completed: mentions={len(mentions)}, canonical={len(canonical_map)}")
+                except Exception as ve:
+                    logger.error(f"v2 entity extraction failed for {document_id}: {ve}")
             
-            # Update document status to ingested
+            # Update document status to pending_review
             supabase_service.client.table("documents").update({
-                "status": "ingested",
+                "status": "pending_review",  # Changed from ingested to require review
                 "chunk_count": result.get("chunks_created", 0),
                 "entity_count": result.get("entities_extracted", 0),
                 "updated_at": datetime.utcnow().isoformat(),
-                "ingested_at": datetime.utcnow().isoformat()
+                "processed_at": datetime.utcnow().isoformat()  # Changed from ingested_at to processed_at
             }).eq("id", document_id).execute()
         else:
             error_msg = result.get("error", "Unknown error") if result else "Processing returned no result"
@@ -851,3 +1325,5 @@ async def reprocess_document_task(
             }).eq("id", document_id).execute()
         except:
             pass
+
+# Force reload

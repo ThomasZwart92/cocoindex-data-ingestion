@@ -1,0 +1,30 @@
+C:\Users\tzwar\Documents\Dev\cocoindex\app\services\qdrant_service.py:69: UserWarning: Api key is used with an insecure connection.
+  self.client = QdrantClient(url=self.url, api_key=self.api_key)
+C:\Users\tzwar\Documents\Dev\cocoindex\app\services\qdrant_service.py:70: UserWarning: Api key is used with an insecure connection.
+  self.async_client = AsyncQdrantClient(url=self.url, api_key=self.api_key)
+INFO:     Started server process [46708]
+INFO:     Waiting for application startup.
+2025-09-02 17:14:50,234 - app.main - INFO - Starting up application...
+2025-09-02 17:14:50,235 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-02 17:14:50,314 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-02 17:14:50,326 - app.services.neo4j_service - INFO - Created constraint/index: entity_id
+2025-09-02 17:14:50,328 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT entity_id FOR (e:Entity) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE'
+2025-09-02 17:14:50,338 - app.services.neo4j_service - INFO - Created constraint/index: document_id
+2025-09-02 17:14:50,341 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT document_id IF NOT EXISTS FOR (e:Document) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT document_id FOR (e:Document) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.id IS UNIQUE'
+2025-09-02 17:14:50,347 - app.services.neo4j_service - INFO - Created constraint/index: entity_name
+2025-09-02 17:14:50,349 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE RANGE INDEX entity_name IF NOT EXISTS FOR (e:Entity) ON (e.name)` has no effect.} {description: `RANGE INDEX entity_name FOR (e:Entity) ON (e.name)` already exists.} {position: None} for query: 'CREATE INDEX entity_name IF NOT EXISTS FOR (e:Entity) ON (e.name)'
+2025-09-02 17:14:50,355 - app.services.neo4j_service - INFO - Created constraint/index: entity_type
+2025-09-02 17:14:50,357 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE RANGE INDEX entity_type IF NOT EXISTS FOR (e:Entity) ON (e.type)` has no effect.} {description: `RANGE INDEX entity_type FOR (e:Entity) ON (e.type)` already exists.} {position: None} for query: 'CREATE INDEX entity_type IF NOT EXISTS FOR (e:Entity) ON (e.type)'
+2025-09-02 17:14:50,363 - app.services.neo4j_service - INFO - Created constraint/index: entity_name_type
+2025-09-02 17:14:50,366 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE RANGE INDEX entity_name_type IF NOT EXISTS FOR (e:Entity) ON (e.name, e.type)` has no effect.} {description: `RANGE INDEX entity_name_type FOR (e:Entity) ON (e.name, e.type)` already exists.} {position: None} for query: 'CREATE INDEX entity_name_type IF NOT EXISTS FOR (e:Entity) ON (e.name, e.type)'
+2025-09-02 17:14:51,180 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-02 17:14:51,885 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-02 17:14:51,887 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-02 17:14:51,888 - app.main - INFO - Application startup complete
+INFO:     Application startup complete.
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 8001): [winerror 10048] only one usage of each socket address (protocol/network address/port) is normally permitted
+INFO:     Waiting for application shutdown.
+2025-09-02 17:14:51,890 - app.main - INFO - Shutting down application...
+2025-09-02 17:14:51,891 - app.services.neo4j_service - INFO - Closed Neo4j connection
+2025-09-02 17:14:51,891 - app.main - INFO - Application shutdown complete
+INFO:     Application shutdown complete.

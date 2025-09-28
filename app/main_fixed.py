@@ -3,6 +3,7 @@ Fixed FastAPI Main Application
 Resolves startup issues with graceful service handling
 """
 from fastapi import FastAPI, Request, HTTPException
+from fastapi import BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -13,6 +14,7 @@ from typing import Optional
 
 # Import API routers
 from app.api import documents, processing, chunks, entities
+from app.api import query as query_api
 from app.config import settings
 
 # Configure logging
@@ -114,6 +116,7 @@ app.include_router(documents.router)
 app.include_router(processing.router)
 app.include_router(chunks.router)
 app.include_router(entities.router)
+app.include_router(query_api.router)
 
 
 # Root endpoint
@@ -174,61 +177,89 @@ async def health_check(request: Request):
     return health_status
 
 
-# Processing endpoints
+# Processing endpoints (compat wrappers forwarding to real processing API)
 @app.post("/api/process/notion")
-async def trigger_notion_scan():
-    """Trigger Notion source scanning."""
+async def trigger_notion_scan(
+    background_tasks: BackgroundTasks,
+    security_level: str = "employee",
+    workspace_id: str | None = None,
+    force_update: bool = False,
+):
+    """Trigger Notion source scanning (for compatibility)."""
     try:
-        # In a real implementation, this would trigger an async Celery task
-        # For now, we'll return a mock response
-        return {
-            "status": "success",
-            "message": "Notion scan triggered",
-            "job_id": str(uuid.uuid4()),
-            "count": 0,
-            "new": 0,
-            "updated": 0
-        }
+        # Forward to real processing endpoint with defaults, preserving background task scheduling
+        return await processing.process_notion(
+            background_tasks=background_tasks,
+            security_level=security_level,
+            workspace_id=workspace_id,
+            force_update=force_update,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/process/gdrive")
-async def trigger_gdrive_scan():
-    """Trigger Google Drive source scanning."""
+async def trigger_gdrive_scan(
+    background_tasks: BackgroundTasks,
+    security_level: str = "all",
+    folder_id: str | None = None,
+    file_types: str | None = ".pdf,.docx,.txt,.md,.gdoc,.gsheet,.gslides",
+    force_update: bool = False,
+):
+    """Trigger Google Drive source scanning (for compatibility)."""
     try:
-        # In a real implementation, this would trigger an async Celery task
-        # For now, we'll return a mock response
-        return {
-            "status": "success",
-            "message": "Google Drive scan triggered",
-            "job_id": str(uuid.uuid4()),
-            "count": 0,
-            "new": 0,
-            "updated": 0
-        }
+        # Forward to real processing endpoint with defaults, preserving background task scheduling
+        return await processing.process_gdrive(
+            background_tasks=background_tasks,
+            security_level=security_level,
+            folder_id=folder_id,
+            file_types=file_types,
+            force_update=force_update,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/sources/scan")
-async def trigger_source_scan(source: str = None):
-    """Trigger scanning for a specific source."""
+async def trigger_source_scan(
+    source: str | None = None,
+    background_tasks: BackgroundTasks | None = None,
+    security_level: str = "all",
+    folder_id: str | None = None,
+    file_types: str | None = ".pdf,.docx,.txt,.md,.gdoc,.gsheet,.gslides",
+    force_update: bool = False,
+):
+    """Trigger scanning for a specific source or all sources.
+
+    Compatibility wrapper that forwards to real processing endpoints.
+    """
     if source == "notion":
-        return await trigger_notion_scan()
-    elif source == "gdrive":
-        return await trigger_gdrive_scan()
+        return await trigger_notion_scan(background_tasks or BackgroundTasks(), security_level=security_level, force_update=force_update)
+    elif source in ("gdrive", "google_drive", "drive"):
+        return await trigger_gdrive_scan(
+            background_tasks or BackgroundTasks(),
+            security_level=security_level,
+            folder_id=folder_id,
+            file_types=file_types,
+            force_update=force_update,
+        )
     else:
-        # Default behavior when no source specified
-        notion_result = await trigger_notion_scan()
-        gdrive_result = await trigger_gdrive_scan()
+        # Default behavior when no source specified: scan both
+        notion_result = await trigger_notion_scan(background_tasks or BackgroundTasks(), security_level=security_level, force_update=force_update)
+        gdrive_result = await trigger_gdrive_scan(
+            background_tasks or BackgroundTasks(),
+            security_level=security_level,
+            folder_id=folder_id,
+            file_types=file_types,
+            force_update=force_update,
+        )
         return {
             "status": "success",
             "message": "All sources scanned",
             "results": {
                 "notion": notion_result,
-                "gdrive": gdrive_result
-            }
+                "gdrive": gdrive_result,
+            },
         }
 
 

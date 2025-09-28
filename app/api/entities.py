@@ -12,8 +12,9 @@ from app.models.entity import Entity as EntityModel
 from app.models.document import Document, DocumentStatus
 from app.services.supabase_service import SupabaseService
 from app.config import settings
+from app.utils.entity_deduplication import EntityDeduplicator
 # Import bridge endpoint for alias
-from app.api.bridge import get_document_entities as bridge_get_entities
+from app.api.bridge import get_document_entities_neo4j as bridge_get_entities
 
 logger = logging.getLogger(__name__)
 
@@ -45,51 +46,79 @@ supabase_service = SupabaseService()
 
 @router.get("/", response_model=List[dict])
 async def list_entities(
-    document_id: Optional[str] = Query(None, description="Filter by document"),
-    entity_type: Optional[str] = Query(None, description="Filter by entity type"),
-    min_confidence: float = Query(0.0, ge=0.0, le=1.0, description="Minimum confidence score"),
+    document_id: Optional[str] = Query(None, description="Filter by document (mentions)"),
+    entity_type: Optional[str] = Query(None, description="Filter by canonical entity type"),
+    min_quality: float = Query(0.0, ge=0.0, le=1.0, description="Minimum canonical quality score"),
     limit: int = Query(100, ge=1, le=500, description="Maximum entities to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination")
 ):
     """
-    List entities with optional filtering
+    List canonical entities with optional filtering.
+    If document_id is provided, returns canonical entities that have mentions in that document.
     """
     try:
-        # Build query with Supabase
-        query = supabase_service.client.table("entities").select("*")
+        client = supabase_service.client
+        canonical_ids: Optional[list[str]] = None
         
-        # Apply filters
+        # If filtering by document, fetch canonical ids that have mentions in that document
         if document_id:
-            query = query.eq("document_id", document_id)
+            logger.info(f"Filtering entities for document: {document_id}")
+            mention_res = (
+                client.table("entity_mentions")
+                .select("canonical_entity_id")
+                .eq("document_id", document_id)
+                .not_.is_("canonical_entity_id", "null")
+                .execute()
+            )
+            logger.info(f"Found {len(mention_res.data or [])} mentions with canonical_entity_id")
+            ids = [m.get("canonical_entity_id") for m in (mention_res.data or []) if m.get("canonical_entity_id")]
+            canonical_ids = list({i for i in ids}) if ids else []
+            logger.info(f"Extracted {len(canonical_ids)} unique canonical entity IDs")
+            if not canonical_ids:
+                logger.warning("No canonical entity IDs found, returning empty list")
+                return []
+
+        # Build canonical_entities query
+        cquery = client.table("canonical_entities").select("*")
+        if canonical_ids is not None:
+            logger.info(f"Filtering canonical_entities by {len(canonical_ids)} IDs")
+            cquery = cquery.in_("id", canonical_ids)
         if entity_type:
-            query = query.eq("entity_type", entity_type)
-        if min_confidence > 0:
-            query = query.gte("confidence_score", min_confidence)
-        
-        # Execute query with pagination
-        query = query.range(offset, offset + limit - 1)
-        response = query.execute()
-        
-        # Convert to expected format
+            cquery = cquery.eq("type", entity_type)
+        if min_quality > 0:
+            cquery = cquery.gte("quality_score", min_quality)
+        cquery = cquery.range(offset, offset + limit - 1)
+        cres = cquery.execute()
+        logger.info(f"Retrieved {len(cres.data or [])} canonical entities")
+
+        # Map canonical entities and include mention counts when doc filter is present
         result = []
-        for entity in response.data:
-            result.append({
-                "id": entity.get("id"),
-                "document_id": entity.get("document_id"),
-                "name": entity.get("entity_name"),  # Note: column name is entity_name
-                "type": entity.get("entity_type"),  # Note: column name is entity_type
-                "confidence": entity.get("confidence_score", 0.0),  # Note: column name is confidence_score
-                "metadata": entity.get("metadata") or {},
-                "created_at": entity.get("created_at"),
-                "updated_at": entity.get("updated_at")
-            })
-        
-        logger.info(f"Listed {len(result)} entities")
+        for ce in (cres.data or []):
+            item = {
+                "id": ce.get("id"),
+                "name": ce.get("name"),
+                "type": ce.get("type"),
+                "quality_score": ce.get("quality_score", 0.0),
+                "is_validated": ce.get("is_validated", False),
+                "aliases": ce.get("aliases", []),
+                "metadata": ce.get("metadata", {}),
+                "document_id": document_id,
+            }
+            if document_id:
+                # Count mentions for this doc
+                count_res = (
+                    client.table("entity_mentions").select("id")
+                    .eq("document_id", document_id)
+                    .eq("canonical_entity_id", ce.get("id"))
+                    .execute()
+                )
+                item["mentions_in_document"] = len(count_res.data or [])
+            result.append(item)
+        logger.info(f"Returning {len(result)} entities for document {document_id}")
         return result
-        
     except Exception as e:
-        logger.error(f"Error listing entities: {e}")
-        return []  # Return empty list on error to prevent crash
+        logger.error(f"Error listing canonical entities: {e}", exc_info=True)
+        return []
 
 
 @router.get("/{entity_id}")
@@ -108,56 +137,52 @@ async def get_entity(
         # Document IDs are UUIDs, entity IDs might be different
         logger.info(f"Getting entity/document entities for ID: {entity_id}")
         
-        # Try to fetch entities from Supabase
-        response = supabase_service.client.table("entities").select("*").eq("document_id", entity_id).execute()
-        
-        if response.data:
-            # This is a document_id, return entities for the document
-            entities = response.data
-            logger.info(f"Found {len(entities)} entities for document {entity_id}")
-            
-            # Convert to expected format (frontend expects array directly)
-            result = []
-            for entity in entities:
-                result.append({
-                    "id": entity.get("id"),
-                    "document_id": entity.get("document_id"),
-                    "entity_name": entity.get("entity_name"),
-                    "entity_type": entity.get("entity_type"),
-                    "confidence": entity.get("confidence_score", 0.0),
-                    "metadata": entity.get("metadata") or {},
-                    "created_at": entity.get("created_at"),
-                    "updated_at": entity.get("updated_at")
-                })
-            
-            # Return array directly for frontend compatibility
-            return result
-        else:
-            # Try to fetch as a single entity
-            entity_response = supabase_service.client.table("entities").select("*").eq("id", entity_id).execute()
-            
-            if entity_response.data and len(entity_response.data) > 0:
-                entity = entity_response.data[0]
-                
-                # Convert to expected format and return single entity as array
-                return [{
-                    "id": entity.get("id"),
-                    "document_id": entity.get("document_id"),
-                    "entity_name": entity.get("entity_name"),
-                    "entity_type": entity.get("entity_type"),
-                    "confidence": entity.get("confidence_score", 0.0),
-                    "metadata": entity.get("metadata") or {},
-                    "created_at": entity.get("created_at"),
-                    "updated_at": entity.get("updated_at")
-                }]
-            else:
-                # No entity found, return empty array
+        client = supabase_service.client
+        # Treat as document_id first: return canonical entities present in that document via mentions
+        mention_res = client.table("entity_mentions").select("canonical_entity_id").eq("document_id", entity_id).neq("canonical_entity_id", None).execute()
+        logger.info(f"Found {len(mention_res.data or [])} mentions with canonical_entity_id for document {entity_id}")
+        if mention_res.data:
+            ids = list({row.get("canonical_entity_id") for row in mention_res.data if row.get("canonical_entity_id")})
+            logger.info(f"Extracted {len(ids)} unique canonical entity IDs")
+            if not ids:
+                logger.warning("No canonical entity IDs found in mentions, returning empty")
                 return []
+            ce_res = client.table("canonical_entities").select("*").in_("id", ids).execute()
+            logger.info(f"Retrieved {len(ce_res.data or [])} canonical entities")
+            result = []
+            for ce in (ce_res.data or []):
+                result.append({
+                    "id": ce.get("id"),
+                    "name": ce.get("name"),
+                    "type": ce.get("type"),
+                    "quality_score": ce.get("quality_score", 0.0),
+                    "is_validated": ce.get("is_validated", False),
+                    "metadata": ce.get("metadata", {}),
+                    "document_id": entity_id,
+                })
+            logger.info(f"Returning {len(result)} entities for document {entity_id}")
+            return result
+        # Otherwise treat as canonical entity id and return it with mentions
+        ce_res = client.table("canonical_entities").select("*").eq("id", entity_id).execute()
+        if ce_res.data:
+            ce = ce_res.data[0]
+            # Fetch mentions across documents
+            mentions_res = client.table("entity_mentions").select("id,document_id,chunk_id,text,type,start_offset,end_offset,confidence").eq("canonical_entity_id", entity_id).execute()
+            return [{
+                "id": ce.get("id"),
+                "name": ce.get("name"),
+                "type": ce.get("type"),
+                "quality_score": ce.get("quality_score", 0.0),
+                "is_validated": ce.get("is_validated", False),
+                "metadata": ce.get("metadata", {}),
+                "mentions": mentions_res.data or []
+            }]
+        return []
         
     except Exception as e:
         logger.error(f"Error getting entity {entity_id}: {e}")
-        # Return empty array instead of error to prevent frontend crash
-        return []
+        # Bubble up as HTTP error so the client can react appropriately
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/", response_model=dict)
@@ -346,6 +371,139 @@ async def delete_entity(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/find-duplicates")
+async def find_duplicate_entities(
+    document_id: str,
+    threshold: float = Query(0.85, ge=0.0, le=1.0, description="Similarity threshold"),
+    auto_merge: bool = Query(False, description="Automatically merge high-confidence duplicates")
+):
+    """
+    Find duplicate entities in a document and optionally auto-merge them.
+    """
+    try:
+        # Get all entities for the document
+        entities_response = supabase_service.client.table("entities")\
+            .select("*")\
+            .eq("document_id", document_id)\
+            .execute()
+        
+        entities = entities_response.data if entities_response.data else []
+        
+        if len(entities) < 2:
+            return {
+                "duplicates": [],
+                "merged": 0,
+                "message": "Not enough entities to check for duplicates"
+            }
+        
+        # Find duplicate groups
+        duplicate_groups = EntityDeduplicator.find_duplicates(entities, threshold)
+        
+        merged_count = 0
+        groups_for_review = []
+        
+        if auto_merge:
+            # Auto-merge high confidence duplicates
+            for group in duplicate_groups:
+                # Calculate average similarity in group
+                names = [e.get('entity_name', e.get('name', '')) for e in group]
+                total_sim = 0
+                count = 0
+                
+                for i in range(len(names)):
+                    for j in range(i + 1, len(names)):
+                        sim = EntityDeduplicator.calculate_similarity(names[i], names[j])
+                        total_sim += sim
+                        count += 1
+                
+                avg_similarity = total_sim / count if count > 0 else 0
+                
+                # Auto-merge if very high similarity
+                if avg_similarity >= 0.95:
+                    # Merge the group
+                    merged_data = EntityDeduplicator.merge_entity_data(group)
+                    
+                    # Update first entity with merged data
+                    first_id = group[0]['id']
+                    update_data = {
+                        'entity_name': merged_data.get('entity_name'),
+                        'confidence_score': merged_data.get('confidence_score'),
+                        'metadata': merged_data.get('metadata'),
+                        'updated_at': datetime.utcnow().isoformat()
+                    }
+                    
+                    supabase_service.client.table("entities")\
+                        .update(update_data)\
+                        .eq("id", first_id)\
+                        .execute()
+                    
+                    # Delete other entities in group
+                    other_ids = [e['id'] for e in group[1:]]
+                    if other_ids:
+                        supabase_service.client.table("entities")\
+                            .delete()\
+                            .in_("id", other_ids)\
+                            .execute()
+                    
+                    merged_count += len(group) - 1
+                    
+                    logger.info(f"Auto-merged {len(group)} entities: {names}")
+                else:
+                    # Add to review list
+                    groups_for_review.append({
+                        "entities": group,
+                        "similarity": avg_similarity,
+                        "names": names
+                    })
+        else:
+            # Return all groups for review
+            for group in duplicate_groups:
+                names = [e.get('entity_name', e.get('name', '')) for e in group]
+                total_sim = 0
+                count = 0
+                
+                for i in range(len(names)):
+                    for j in range(i + 1, len(names)):
+                        sim = EntityDeduplicator.calculate_similarity(names[i], names[j])
+                        total_sim += sim
+                        count += 1
+                
+                avg_similarity = total_sim / count if count > 0 else 0
+                
+                groups_for_review.append({
+                    "entities": group,
+                    "similarity": avg_similarity,
+                    "names": names
+                })
+        
+        # Update document entity count if entities were merged
+        if merged_count > 0:
+            # Get updated entity count
+            count_response = supabase_service.client.table("entities")\
+                .select("id", count="exact")\
+                .eq("document_id", document_id)\
+                .execute()
+            
+            new_count = count_response.count if count_response else 0
+            
+            # Update document
+            supabase_service.client.table("documents")\
+                .update({"entity_count": new_count})\
+                .eq("id", document_id)\
+                .execute()
+        
+        return {
+            "duplicates": groups_for_review,
+            "merged": merged_count,
+            "total_groups": len(duplicate_groups),
+            "message": f"Found {len(duplicate_groups)} duplicate groups, merged {merged_count} entities"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error finding duplicates: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/merge")
 async def merge_entities(
     entity_ids: List[str],
@@ -437,46 +595,45 @@ async def get_document_entities(
         if not doc_response.data or len(doc_response.data) == 0:
             raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
         
-        # Query entities
-        query = supabase_service.client.table("entities").select("*").eq("document_id", document_id)
-        
+        # Find canonical ids with mentions in this doc
+        client = supabase_service.client
+        mentions = client.table("entity_mentions").select("canonical_entity_id,confidence,type").eq("document_id", document_id).not_.is_("canonical_entity_id", "null").execute()
+        logger.info(f"Found {len(mentions.data) if mentions.data else 0} mentions for document {document_id}")
+        ids = [m.get("canonical_entity_id") for m in (mentions.data or []) if m.get("canonical_entity_id")]
+        logger.info(f"Extracted {len(ids)} canonical entity IDs")
+        if not ids:
+            return {"document_id": document_id, "total_entities": 0, "entities_by_type": {}, "all_entities": []}
+        # Fetch canonical and filter by type if requested
+        ce_query = client.table("canonical_entities").select("*").in_("id", list(set(ids)))
         if entity_type:
-            query = query.eq("entity_type", entity_type)
-        if min_confidence > 0:
-            query = query.gte("confidence_score", min_confidence)
-        
-        # Order by confidence descending (Supabase syntax)
-        query = query.order("confidence_score", desc=True)
-        
-        entities_response = query.execute()
-        entities = entities_response.data if entities_response.data else []
-        
-        # Group by type for summary
+            ce_query = ce_query.eq("type", entity_type)
+        ce_res = ce_query.execute()
+        ces = ce_res.data or []
+        # Build by-type mapping
         by_type = {}
-        for entity in entities:
-            entity_type_val = entity.get("entity_type", "Unknown")
-            if entity_type_val not in by_type:
-                by_type[entity_type_val] = []
-            by_type[entity_type_val].append({
-                "id": entity.get("id"),
-                "name": entity.get("entity_name"),
-                "confidence": entity.get("confidence_score", 0.0),
-                "metadata": entity.get("metadata", {})
+        for ce in ces:
+            t = ce.get("type", "Unknown")
+            by_type.setdefault(t, []).append({
+                "id": ce.get("id"),
+                "name": ce.get("name"),
+                "quality_score": ce.get("quality_score", 0.0),
+                "is_validated": ce.get("is_validated", False),
+                "metadata": ce.get("metadata", {}),
             })
-        
         return {
             "document_id": document_id,
-            "total_entities": len(entities),
+            "total_entities": len(ces),
             "entities_by_type": by_type,
             "all_entities": [
                 {
-                    "id": e.get("id"),
-                    "name": e.get("entity_name"),
-                    "type": e.get("entity_type"),
-                    "confidence": e.get("confidence_score", 0.0),
-                    "metadata": e.get("metadata", {})
+                    "id": ce.get("id"),
+                    "name": ce.get("name"),
+                    "type": ce.get("type"),
+                    "quality_score": ce.get("quality_score", 0.0),
+                    "is_validated": ce.get("is_validated", False),
+                    "metadata": ce.get("metadata", {})
                 }
-                for e in entities
+                for ce in ces
             ]
         }
         
@@ -484,4 +641,37 @@ async def get_document_entities(
         raise
     except Exception as e:
         logger.error(f"Error getting entities for document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/by-document/{document_id}")
+async def list_entities_by_document(
+    document_id: str,
+    entity_type: Optional[str] = Query(None, description="Filter by canonical entity type"),
+    min_quality: float = Query(0.0, ge=0.0, le=1.0, description="Minimum canonical quality score")
+):
+    """
+    Explicit endpoint to list canonical entities for a document by joining mentions → canonical.
+    """
+    try:
+        client = supabase_service.client
+        mention_res = client.table("entity_mentions").select("canonical_entity_id").eq("document_id", document_id).neq("canonical_entity_id", None).execute()
+        ids = [m.get("canonical_entity_id") for m in (mention_res.data or []) if m.get("canonical_entity_id")]
+        if not ids:
+            return []
+        q = client.table("canonical_entities").select("*").in_("id", list(set(ids)))
+        if entity_type:
+            q = q.eq("type", entity_type)
+        if min_quality > 0:
+            q = q.gte("quality_score", min_quality)
+        cres = q.execute()
+        return [{
+            "id": ce.get("id"),
+            "name": ce.get("name"),
+            "type": ce.get("type"),
+            "quality_score": ce.get("quality_score", 0.0),
+            "is_validated": ce.get("is_validated", False),
+            "metadata": ce.get("metadata", {}),
+            "document_id": document_id,
+        } for ce in (cres.data or [])]
+    except Exception as e:
+        logger.error(f"Error listing entities for document {document_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

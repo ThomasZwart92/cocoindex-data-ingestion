@@ -11,6 +11,24 @@ import os
 from dotenv import load_dotenv
 import logging
 
+# Align gotrue's legacy 'proxy' keyword with current httpx signature
+try:
+    from gotrue.http_clients import SyncClient as _GoTrueSyncClient
+    from httpx import Client as _HttpxClient
+except ImportError:
+    _GoTrueSyncClient = None
+else:
+    if _GoTrueSyncClient is not None and not getattr(_GoTrueSyncClient, '_proxy_kw_fix', False):
+        _orig_sync_init = _HttpxClient.__init__
+
+        def _patched_sync_init(self, *args, proxy=None, **kwargs):
+            if proxy is not None:
+                kwargs.setdefault('proxies', proxy)
+            _orig_sync_init(self, *args, **kwargs)
+
+        _GoTrueSyncClient.__init__ = _patched_sync_init
+        _GoTrueSyncClient._proxy_kw_fix = True
+
 logger = logging.getLogger(__name__)
 
 # Load environment variables

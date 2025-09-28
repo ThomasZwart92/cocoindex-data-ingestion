@@ -15,19 +15,27 @@ class DocumentState(str, Enum):
     INGESTED = "ingested"
     FAILED = "failed"
     DELETED = "deleted"
+    # New publishing states
+    PUBLISHING = "publishing"
+    PUBLISHED = "published"
+    PUBLISH_FAILED = "publish_failed"
     
-    @classmethod  
+    @classmethod
     def valid_transitions(cls) -> Dict[str, List[str]]:
         """Define valid state transitions"""
         return {
             cls.DISCOVERED: [cls.PROCESSING, cls.FAILED],
             cls.PROCESSING: [cls.PENDING_REVIEW, cls.FAILED],
             cls.PENDING_REVIEW: [cls.APPROVED, cls.REJECTED, cls.PROCESSING],
-            cls.APPROVED: [cls.INGESTED, cls.FAILED],
+            cls.APPROVED: [cls.PUBLISHING, cls.INGESTED, cls.FAILED],  # Can transition to publishing
             cls.REJECTED: [cls.PROCESSING, cls.DISCOVERED],
             cls.INGESTED: [cls.PROCESSING],  # Allow reprocessing
             cls.FAILED: [cls.PROCESSING, cls.DISCOVERED],
-            cls.DELETED: []  # No transitions from deleted
+            cls.DELETED: [],  # No transitions from deleted
+            # New publishing state transitions
+            cls.PUBLISHING: [cls.PUBLISHED, cls.PUBLISH_FAILED],
+            cls.PUBLISHED: [cls.PROCESSING],  # Allow reprocessing
+            cls.PUBLISH_FAILED: [cls.APPROVED, cls.PUBLISHING]  # Can retry publishing
         }
     
     def can_transition_to(self, new_state: 'DocumentState') -> bool:
@@ -88,6 +96,9 @@ class Document(BaseModel):
     processed_at: Optional[datetime] = None
     approved_at: Optional[datetime] = None
     approved_by: Optional[str] = None
+    published_at: Optional[datetime] = None
+    publish_attempts: int = 0
+    last_publish_error: Optional[str] = None
     
     # Versioning
     version: int = 1
@@ -110,6 +121,13 @@ class Document(BaseModel):
             self.processed_at = datetime.utcnow()
         elif new_state == DocumentState.APPROVED:
             self.approved_at = datetime.utcnow()
+        elif new_state == DocumentState.PUBLISHING:
+            self.publish_attempts += 1
+        elif new_state == DocumentState.PUBLISHED:
+            self.published_at = datetime.utcnow()
+            self.last_publish_error = None
+        elif new_state == DocumentState.PUBLISH_FAILED and error:
+            self.last_publish_error = error
             
         return True
     
@@ -133,7 +151,7 @@ class Document(BaseModel):
             else:
                 data['parse_tier'] = self.parse_tier
         # Convert datetime to ISO format
-        for field in ['created_at', 'updated_at', 'processed_at', 'approved_at']:
+        for field in ['created_at', 'updated_at', 'processed_at', 'approved_at', 'published_at']:
             if field in data and data[field]:
                 data[field] = data[field].isoformat()
         return data

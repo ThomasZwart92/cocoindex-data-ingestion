@@ -1,0 +1,24 @@
+ 
+ -------------- celery@ThomasZwart v5.3.4 (emerald-rush)
+--- ***** ----- 
+-- ******* ---- Windows-11-10.0.26100-SP0 2025-09-27 11:33:04
+- *** --- * --- 
+- ** ---------- [config]
+- ** ---------- .> app:         ingestion_portal:0x2a0a00edaf0
+- ** ---------- .> transport:   redis://localhost:6379/0
+- ** ---------- .> results:     redis://localhost:6379/0
+- *** --- * --- .> concurrency: 4 (thread)
+-- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+--- ***** ----- 
+ -------------- [queues]
+                .> celery           exchange=celery(direct) key=celery
+                
+
+[tasks]
+  . chunk_document
+  . extract_entities
+  . finalize_document_processing
+  . generate_embeddings
+  . parse_document
+  . process_document
+

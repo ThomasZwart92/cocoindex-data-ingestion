@@ -1,18 +1,18 @@
 """
-Process existing documents with three-tier chunking and save to database.
+Process existing documents with two-tier chunking and save to database.
 """
 
 import asyncio
-from app.processors.three_tier_chunker import ThreeTierChunker
+from app.processors.two_tier_chunker import TwoTierChunker
 from app.services.supabase_service import SupabaseService
 from app.connectors.notion_connector import NotionConnector
 
 
 async def process_nc2050():
-    """Process NC2050 document with three-tier chunking."""
+    """Process NC2050 document with two-tier chunking."""
     
     # Initialize services
-    chunker = ThreeTierChunker()
+    chunker = TwoTierChunker()
     supabase = SupabaseService()
     
     # Get the NC2050 document
@@ -37,8 +37,8 @@ async def process_nc2050():
     print("Clearing existing chunks...")
     supabase.client.table('chunks').delete().eq('document_id', document_id).execute()
     
-    # Process with three-tier chunking
-    print("Processing with three-tier chunking...")
+    # Process with two-tier chunking
+    print("Processing with two-tier chunking...")
     success = await chunker.process_and_save(
         document_id=document_id,
         content=content,
@@ -50,7 +50,7 @@ async def process_nc2050():
     )
     
     if success:
-        print("\n✅ Successfully processed and saved three-tier chunks!")
+        print("\n✅ Successfully processed and saved two-tier chunks!")
         
         # Verify the chunks were saved
         chunks_response = supabase.client.table('chunks').select('*').eq('document_id', document_id).execute()
@@ -79,7 +79,7 @@ async def process_nc2050():
         supabase.client.table('documents').update({
             'status': 'chunked',
             'processing_metadata': {
-                'chunking_method': 'three_tier',
+                'chunking_method': 'two_tier',
                 'total_chunks': len(chunks_response.data),
                 'page_chunks': len(page_chunks),
                 'section_chunks': len(section_chunks),
@@ -87,7 +87,7 @@ async def process_nc2050():
             }
         }).eq('id', document_id).execute()
         
-        print("\n🎉 Document successfully processed with three-tier chunking!")
+        print("\n🎉 Document successfully processed with two-tier chunking!")
         print("You can now view the hierarchical chunks in the frontend.")
         
     else:
@@ -95,9 +95,9 @@ async def process_nc2050():
 
 
 async def process_all_documents():
-    """Process all documents with three-tier chunking."""
+    """Process all documents with two-tier chunking."""
     
-    chunker = ThreeTierChunker()
+    chunker = TwoTierChunker()
     supabase = SupabaseService()
     
     # Get all documents
@@ -112,7 +112,7 @@ async def process_all_documents():
             # Clear existing chunks
             supabase.client.table('chunks').delete().eq('document_id', doc['id']).execute()
             
-            # Process with three-tier chunking
+            # Process with two-tier chunking
             success = await chunker.process_and_save(
                 document_id=doc['id'],
                 content=doc.get('content', ''),
@@ -134,7 +134,7 @@ async def process_all_documents():
 
 async def main():
     """Main entry point."""
-    print("THREE-TIER CHUNKING PROCESSOR")
+    print("TWO-TIER CHUNKING PROCESSOR")
     print("="*80)
     
     print("\nOptions:")

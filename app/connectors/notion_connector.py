@@ -403,16 +403,91 @@ class NotionConnector:
         
         elif block_type == "bulleted_list_item":
             text = self._get_text_from_rich_text(block[block_type].get("rich_text", []))
-            return f"- {text}"
-        
+
+            # Fetch nested content under bullet points
+            nested_content = []
+            if block.get("has_children", False):
+                try:
+                    # Recursively fetch children blocks
+                    children_response = await self.client.blocks.children.list(
+                        block_id=block["id"],
+                        page_size=100
+                    )
+
+                    for child_block in children_response.get("results", []):
+                        child_markdown = await self._block_to_markdown(child_block)
+                        if child_markdown:
+                            # Indent nested content
+                            indented = "\n".join(f"  {line}" for line in child_markdown.split("\n"))
+                            nested_content.append(indented)
+
+                except Exception as e:
+                    print(f"Error fetching bullet children: {e}")
+
+            # Return bullet and nested content
+            result = f"- {text}"
+            if nested_content:
+                result += "\n" + "\n".join(nested_content)
+            return result
+
         elif block_type == "numbered_list_item":
             text = self._get_text_from_rich_text(block[block_type].get("rich_text", []))
-            return f"1. {text}"
+
+            # Fetch nested content under numbered list items
+            nested_content = []
+            if block.get("has_children", False):
+                try:
+                    # Recursively fetch children blocks
+                    children_response = await self.client.blocks.children.list(
+                        block_id=block["id"],
+                        page_size=100
+                    )
+
+                    for child_block in children_response.get("results", []):
+                        child_markdown = await self._block_to_markdown(child_block)
+                        if child_markdown:
+                            # Indent nested content
+                            indented = "\n".join(f"   {line}" for line in child_markdown.split("\n"))
+                            nested_content.append(indented)
+
+                except Exception as e:
+                    print(f"Error fetching numbered list children: {e}")
+
+            # Return numbered item and nested content
+            result = f"1. {text}"
+            if nested_content:
+                result += "\n" + "\n".join(nested_content)
+            return result
         
         elif block_type == "to_do":
             text = self._get_text_from_rich_text(block[block_type].get("rich_text", []))
             checked = "x" if block[block_type].get("checked", False) else " "
-            return f"- [{checked}] {text}"
+
+            # Fetch nested content under to-do items
+            nested_content = []
+            if block.get("has_children", False):
+                try:
+                    # Recursively fetch children blocks
+                    children_response = await self.client.blocks.children.list(
+                        block_id=block["id"],
+                        page_size=100
+                    )
+
+                    for child_block in children_response.get("results", []):
+                        child_markdown = await self._block_to_markdown(child_block)
+                        if child_markdown:
+                            # Indent nested content
+                            indented = "\n".join(f"  {line}" for line in child_markdown.split("\n"))
+                            nested_content.append(indented)
+
+                except Exception as e:
+                    print(f"Error fetching to-do children: {e}")
+
+            # Return to-do item and nested content
+            result = f"- [{checked}] {text}"
+            if nested_content:
+                result += "\n" + "\n".join(nested_content)
+            return result
         
         elif block_type == "toggle":
             text = self._get_text_from_rich_text(block[block_type].get("rich_text", []))

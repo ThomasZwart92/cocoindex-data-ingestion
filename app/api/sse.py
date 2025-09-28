@@ -1,6 +1,13 @@
 """
 Server-Sent Events (SSE) API for real-time updates
 Provides live document processing status updates
+
+Example event frames (one per line, prefixed by `data:`):
+
+data: {"type": "processing_started", "document": {"id": "...", "status": "processing", "updated_at": "..."}, "timestamp": "..."}
+data: {"type": "review_required", "document": {"id": "...", "status": "pending_review"}, "timestamp": "..."}
+data: {"type": "processing_failed", "document": {"id": "...", "status": "failed"}, "timestamp": "..."}
+data: {"type": "processing_complete", "document": {"id": "...", "status": "ingested"}, "timestamp": "..."}
 """
 
 from fastapi import APIRouter, Request

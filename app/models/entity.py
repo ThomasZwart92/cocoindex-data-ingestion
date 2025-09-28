@@ -24,6 +24,8 @@ class EntityType(Enum):
     PROBLEM = "problem"  # Issues, symptoms, error states
     STATE = "state"  # Operational modes or statuses (active, locked, failed)
     CONDITION = "condition"  # States of wear, degradation, or quality (corrosion, contamination)
+    TOOL = "tool"  # Physical or software tools used in procedures
+    MATERIAL = "material"  # Raw materials, supplies, consumables
     OTHER = "other"
 
 class Entity(BaseModel):

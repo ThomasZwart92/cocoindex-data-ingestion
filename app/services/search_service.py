@@ -10,6 +10,7 @@ from datetime import datetime
 import numpy as np
 
 from app.services.qdrant_service import QdrantService
+from app.services.supabase_service import SupabaseService
 from app.services.neo4j_service import Neo4jService
 from app.services.embedding_service import EmbeddingService
 from app.config import settings
@@ -43,6 +44,7 @@ class SearchService:
         self.qdrant = qdrant_service or QdrantService()
         self.neo4j = neo4j_service or Neo4jService()
         self.embedder = embedding_service or EmbeddingService()
+        self.supabase = SupabaseService()
         
         # Performance tracking
         self.search_metrics = {
@@ -54,7 +56,7 @@ class SearchService:
     async def vector_search(
         self,
         query: str,
-        collection: str = "documents",
+        collection: str = "document_chunks",
         limit: int = 10,
         score_threshold: float = 0.7,
         filters: Optional[Dict] = None
@@ -76,7 +78,8 @@ class SearchService:
         
         try:
             # Generate query embedding
-            query_embedding = await self.embedder.embed_text(query)
+            embed_res = await self.embedder.embed_text(query)
+            query_embedding = embed_res.embedding
             
             # Search in Qdrant
             results = await self.qdrant.search(
@@ -84,21 +87,21 @@ class SearchService:
                 query_vector=query_embedding,
                 limit=limit,
                 score_threshold=score_threshold,
-                with_payload=True,
-                with_vectors=False
+                filter_conditions=filters
             )
             
             # Convert to SearchResult
             search_results = []
             for result in results:
+                payload = result.payload or {}
                 search_result = SearchResult(
                     id=result.id,
                     score=result.score,
                     source="vector",
-                    title=result.payload.get("title", "Untitled"),
-                    content=result.payload.get("text", "")[:500],
-                    metadata=result.payload,
-                    chunk_location=result.payload.get("location")
+                    title=f"Document {payload.get('document_id', '')}",
+                    content=payload.get("chunk_text", "")[:500],
+                    metadata=payload,
+                    chunk_location=payload.get("location")
                 )
                 search_results.append(search_result)
             
@@ -180,8 +183,10 @@ class SearchService:
         query: str,
         use_vector: bool = True,
         use_graph: bool = True,
+        use_bm25: bool = True,
         vector_weight: float = 0.7,
-        limit: int = 10
+        limit: int = 10,
+        rerank: bool = True
     ) -> Tuple[List[SearchResult], float]:
         """
         Perform hybrid search combining vector and graph results
@@ -199,40 +204,223 @@ class SearchService:
         start_time = time.time()
         all_results = []
         
-        tasks = []
         if use_vector:
-            tasks.append(self.vector_search(query, limit=limit))
-        
+            try:
+                # Single embed, query three collections
+                embed_res = await self.embedder.embed_text(query)
+                qv = embed_res.embedding
+                # chunks
+                chunks = await self.qdrant.search(query_vector=qv, collection_name="document_chunks", limit=limit)
+                # tables
+                tables = await self.qdrant.search(query_vector=qv, collection_name="document_tables", limit=limit)
+                # images (text vector)
+                images = await self.qdrant.search(query_vector=qv, collection_name="document_images", limit=limit, vector_name="text")
+
+                def map_results(items, label):
+                    out = []
+                    for it in items:
+                        payload = it.payload or {}
+                        content = payload.get("chunk_text") or ""
+                        out.append(SearchResult(
+                            id=it.id,
+                            score=it.score,
+                            source=label,
+                            title=f"Document {payload.get('document_id', '')}",
+                            content=(content or "")[:500],
+                            metadata=payload,
+                            chunk_location=None
+                        ))
+                    return out
+
+                all_results.extend(map_results(chunks, "vector_chunk"))
+                all_results.extend(map_results(tables, "vector_table"))
+                all_results.extend(map_results(images, "vector_image"))
+            except Exception as e:
+                logger.error(f"Vector multi-collection search failed: {e}")
+
+        bm25_results: List[SearchResult] = []
+        if use_bm25:
+            try:
+                bm25_results, _ = await self.bm25_search(query, limit=limit * 2)
+                all_results.extend(bm25_results)
+            except Exception as e:
+                logger.error(f"BM25 search failed: {e}")
+
         if use_graph:
-            # Extract entities from query for graph search
-            # Simple approach: look for capitalized words
-            entities = [word for word in query.split() if word[0].isupper()]
-            entity_name = entities[0] if entities else None
-            tasks.append(self.graph_search(entity_name=entity_name, limit=limit))
+            try:
+                # Simple keyword-based entity seed
+                entities = [word for word in query.split() if word[:1].isupper()]
+                entity_name = entities[0] if entities else None
+                graph_results, _ = await self.graph_search(entity_name=entity_name, limit=limit)
+                all_results.extend(graph_results)
+            except Exception as e:
+                logger.error(f"Graph search failed: {e}")
         
-        # Run searches in parallel
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Merge and rank results using reciprocal rank fusion for vector + bm25, then blend graph
+        merged_results = self._fuse_results(all_results, primary_sources={"vector_chunk", "vector_table", "vector_image", "vector"},
+                                            bm25_sources={"bm25"}, limit=limit * 2)
         
-        # Combine results
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(f"Search task failed: {result}")
-                continue
-            
-            search_results, _ = result
-            all_results.extend(search_results)
-        
-        # Merge and rank results
-        merged_results = self._merge_and_rank(
-            all_results, 
-            vector_weight=vector_weight
-        )[:limit]
+        # Optional reranking
+        if rerank and merged_results:
+            try:
+                from app.services.reranker_service import RerankerService
+                rr = RerankerService()
+                merged_results = await rr.rerank(query, merged_results, top_k=limit)
+            except Exception as e:
+                logger.warning(f"Rerank failed or unavailable: {e}")
+                merged_results = merged_results[:limit]
+        else:
+            merged_results = merged_results[:limit]
         
         latency_ms = (time.time() - start_time) * 1000
         self.search_metrics["hybrid_searches"].append(latency_ms)
         
         logger.info(f"Hybrid search completed in {latency_ms:.2f}ms, found {len(merged_results)} results")
         return merged_results, latency_ms
+
+    def _tokenize(self, text: str) -> List[str]:
+        import re
+        stop = {'the','a','an','and','or','but','in','on','at','to','for','of','with','by','as','is','was','are','were'}
+        tokens = re.findall(r"\b\w+\b", (text or '').lower())
+        return [t for t in tokens if t not in stop and len(t) > 2]
+
+    async def bm25_search(self, query: str, limit: int = 10) -> Tuple[List[SearchResult], float]:
+        """Lexical BM25-style search using Supabase (Postgres).
+        Approximates BM25 by fetching candidates via ILIKE and scoring in Python.
+        """
+        start = time.time()
+        tokens = self._tokenize(query)
+        if not tokens:
+            return [], 0.0
+
+        # Fetch candidates per token (cap per-token to control latency)
+        per_token_limit = max(20, limit)
+        candidates: Dict[str, Dict[str, Any]] = {}
+        df: Dict[str, int] = {t: 0 for t in tokens}
+
+        for t in tokens:
+            try:
+                # Query chunks with contextualized_text ILIKE token
+                res = (
+                    self.supabase.client
+                    .table('chunks')
+                    .select('id,document_id,chunk_text,metadata,contextualized_text,bm25_tokens')
+                    .ilike('contextualized_text', f'%{t}%')
+                    .limit(per_token_limit)
+                    .execute()
+                )
+                rows = res.data or []
+                df[t] = len(rows)
+                for r in rows:
+                    cid = r['id']
+                    if cid not in candidates:
+                        candidates[cid] = r
+            except Exception as e:
+                logger.warning(f"BM25 candidate fetch failed for token '{t}': {e}")
+
+        N = max(1, len(candidates))
+        avg_len = 100.0  # fallback if tokens missing; not critical for ranking
+        lengths: Dict[str, int] = {}
+        for cid, r in candidates.items():
+            toks = r.get('bm25_tokens') or self._tokenize(r.get('contextualized_text') or r.get('chunk_text') or '')
+            lengths[cid] = len(toks)
+        if lengths:
+            avg_len = sum(lengths.values()) / len(lengths)
+
+        # BM25 scoring params
+        k1 = 1.2
+        b = 0.75
+
+        results: List[SearchResult] = []
+        for cid, r in candidates.items():
+            toks = r.get('bm25_tokens') or self._tokenize(r.get('contextualized_text') or r.get('chunk_text') or '')
+            # term frequency per token
+            score = 0.0
+            for t in tokens:
+                tf = toks.count(t)
+                if tf == 0:
+                    continue
+                # doc frequency df[t] over candidate set; smooth
+                dft = max(1, df.get(t, 1))
+                idf = np.log((N - dft + 0.5) / (dft + 0.5) + 1)
+                dl = max(1, lengths.get(cid, len(toks)))
+                denom = tf + k1 * (1 - b + b * dl / avg_len)
+                score += idf * (tf * (k1 + 1)) / denom
+            if score > 0:
+                payload = {
+                    'document_id': r.get('document_id'),
+                    **(r.get('metadata') or {})
+                }
+                content = (r.get('contextualized_text') or r.get('chunk_text') or '')
+                results.append(SearchResult(
+                    id=str(cid),
+                    score=float(score),
+                    source='bm25',
+                    title=f"Document {r.get('document_id','')}",
+                    content=content[:500],
+                    metadata=payload,
+                    chunk_location=None
+                ))
+
+        # Sort by BM25 score
+        results.sort(key=lambda x: x.score, reverse=True)
+        latency = (time.time() - start) * 1000
+        return results[:limit], latency
+
+    def _fuse_results(self, results: List[SearchResult], primary_sources: set, bm25_sources: set, limit: int) -> List[SearchResult]:
+        """Reciprocal Rank Fusion (RRF) between vector and BM25, then blend graph.
+        - Compute ranks per source group; score = sum(1/(k + rank)) with k=60.
+        - Graph results are appended with modest boost if they share IDs with others.
+        """
+        k = 60
+        # Split by source
+        vec = [r for r in results if r.source in primary_sources]
+        bm = [r for r in results if r.source in bm25_sources]
+        gr = [r for r in results if r.source == 'graph']
+
+        def rank_map(items: List[SearchResult]) -> Dict[str, int]:
+            items_sorted = sorted(items, key=lambda x: x.score, reverse=True)
+            return {it.id: idx + 1 for idx, it in enumerate(items_sorted)}
+
+        vr = rank_map(vec)
+        br = rank_map(bm)
+
+        # Collect all IDs from vec and bm25
+        ids = set(vr.keys()) | set(br.keys())
+        fused: Dict[str, SearchResult] = {}
+
+        # Base payload choose highest-score instance
+        best_by_id: Dict[str, SearchResult] = {}
+        for item in vec + bm:
+            if item.id not in best_by_id or item.score > best_by_id[item.id].score:
+                best_by_id[item.id] = item
+
+        for cid in ids:
+            rr_score = 0.0
+            if cid in vr:
+                rr_score += 1.0 / (k + vr[cid])
+            if cid in br:
+                rr_score += 1.0 / (k + br[cid])
+            base = best_by_id[cid]
+            fused[cid] = SearchResult(
+                id=cid,
+                score=rr_score,
+                source='hybrid',
+                title=base.title,
+                content=base.content,
+                metadata=base.metadata,
+                relationships=None,
+                chunk_location=base.chunk_location,
+            )
+
+        # Optionally attach graph insights by boosting if an ID is present in graph (by document id mapping if available)
+        # For simplicity, append graph items that are not already present with small base score
+        for g in gr:
+            if g.id not in fused:
+                fused[g.id] = g
+
+        ranked = sorted(fused.values(), key=lambda x: x.score, reverse=True)
+        return ranked[:limit]
     
     async def semantic_search(
         self,

@@ -1,0 +1,25 @@
+INFO:     Will watch for changes in these directories: ['C:\\Users\\tzwar\\Documents\\Dev\\cocoindex']
+INFO:     Uvicorn running on http://0.0.0.0:8005 (Press CTRL+C to quit)
+INFO:     Started reloader process [14560] using WatchFiles
+C:\Users\tzwar\Documents\Dev\cocoindex\.venv312\Lib\site-packages\pydantic\_internal\_config.py:373: UserWarning: Valid config keys have changed in V2:
+* 'schema_extra' has been renamed to 'json_schema_extra'
+  warnings.warn(message, UserWarning)
+C:\Users\tzwar\Documents\Dev\cocoindex\app\services\qdrant_service.py:69: UserWarning: Api key is used with an insecure connection.
+  self.client = QdrantClient(url=self.url, api_key=self.api_key)
+C:\Users\tzwar\Documents\Dev\cocoindex\app\services\qdrant_service.py:70: UserWarning: Api key is used with an insecure connection.
+  self.async_client = AsyncQdrantClient(url=self.url, api_key=self.api_key)
+INFO:     Started server process [2688]
+INFO:     Waiting for application startup.
+2025-09-27 08:12:39,737 - app.main - INFO - Starting up application...
+2025-09-27 08:12:39,737 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-27 08:12:41,408 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-27 08:12:41,607 - app.services.neo4j_service - INFO - Created constraint/index: entity_id
+2025-09-27 08:12:41,671 - app.services.neo4j_service - INFO - Created constraint/index: document_id
+2025-09-27 08:12:41,712 - app.services.neo4j_service - INFO - Created constraint/index: entity_name
+2025-09-27 08:12:41,736 - app.services.neo4j_service - INFO - Created constraint/index: entity_type
+2025-09-27 08:12:41,765 - app.services.neo4j_service - INFO - Created constraint/index: entity_name_type
+2025-09-27 08:12:42,532 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-27 08:12:43,330 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-27 08:12:43,331 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-27 08:12:43,332 - app.main - INFO - Application startup complete
+INFO:     Application startup complete.

@@ -71,7 +71,13 @@ class GoogleDriveConnector:
         }
         
         env_var = service_account_mapping.get(security_level, "DRIVE_API_KEY_EMPLOYEE_ACCESS")
-        service_account_file = os.getenv(env_var) or os.getenv("GOOGLE_DRIVE_SERVICE_ACCOUNT_PATH")
+        # Try multiple common env var names for flexibility
+        service_account_file = (
+            os.getenv(env_var)
+            or os.getenv("GOOGLE_DRIVE_SERVICE_ACCOUNT_PATH")
+            or os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH")
+            or os.getenv("GOOGLE_DRIVE_CREDENTIALS_PATH")
+        )
         
         # If we got a filename from env, assume it's in the project root
         if service_account_file and not os.path.isabs(service_account_file):
@@ -188,7 +194,9 @@ class GoogleDriveConnector:
                         q=query,
                         pageSize=100,
                         fields="nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, webViewLink, size, parents)",
-                        pageToken=page_token
+                        pageToken=page_token,
+                        supportsAllDrives=True,
+                        includeItemsFromAllDrives=True,
                     ).execute()
                 
                 # Wrap with retry logic
@@ -287,7 +295,9 @@ class GoogleDriveConnector:
                         q=query,
                         pageSize=100,
                         fields="nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, webViewLink, size, parents)",
-                        pageToken=page_token
+                        pageToken=page_token,
+                        supportsAllDrives=True,
+                        includeItemsFromAllDrives=True,
                     ).execute()
                 
                 # Wrap with retry logic
@@ -468,7 +478,7 @@ class GoogleDriveConnector:
         }
         return level_map.get(security_level, 4)
     
-    async def scan_drive(self, folder_id: Optional[str] = None, file_types: List[str] = None) -> List[Dict[str, Any]]:
+    async def scan_drive(self, folder_id: Optional[str] = None, file_types: List[str] = None, folder_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """Scan Google Drive and return document data for database storage
         
         Args:
@@ -478,18 +488,35 @@ class GoogleDriveConnector:
         Returns:
             List of document dictionaries ready for database storage
         """
+        # Determine folders to scan
+        folders_to_scan: Optional[List[str]] = None
+        if folder_ids:
+            folders_to_scan = folder_ids
+        elif folder_id:
+            folders_to_scan = [folder_id]
+
         # Fetch documents from drive
-        documents = await self.get_documents(folder_ids=[folder_id] if folder_id else None)
+        documents = await self.get_documents(folder_ids=folders_to_scan)
         
         # Filter by file types if specified
         if file_types:
+            want = {ext.strip().lower() for ext in file_types if ext}
+            # Map pseudo-extensions to Google MIME types
+            gdoc_map = {
+                ".gdoc": "application/vnd.google-apps.document",
+                ".gsheet": "application/vnd.google-apps.spreadsheet",
+                ".gslides": "application/vnd.google-apps.presentation",
+            }
             filtered_docs = []
             for doc in documents:
-                # Check if file extension matches
-                for ext in file_types:
-                    if doc.name.lower().endswith(ext):
-                        filtered_docs.append(doc)
-                        break
+                name_ext = os.path.splitext(doc.name)[1].lower()
+                if name_ext in want:
+                    filtered_docs.append(doc)
+                    continue
+                # Allow Google types by pseudo-extension selection
+                if any(gext in want and doc.mime_type == gmt for gext, gmt in gdoc_map.items()):
+                    filtered_docs.append(doc)
+                    continue
             documents = filtered_docs
         
         # Convert to document format for database

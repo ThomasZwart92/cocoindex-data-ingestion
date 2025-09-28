@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { documentApi } from '@/lib/api';
 import { useNotification } from '@/components/NotificationProvider';
@@ -12,11 +12,24 @@ interface Entity {
   entity_type: string;
   confidence: number;
   metadata?: Record<string, any>;
+  canonical_metadata?: Record<string, any>;
   properties?: Record<string, any>;
   chunk_ids?: string[];
   is_verified?: boolean;
   is_edited?: boolean;
   original_name?: string;
+  canonical_entity_id?: string | null;
+  canonical_name?: string | null;
+  canonical_type?: string | null;
+}
+
+interface CanonicalEntity {
+  id: string;
+  entity_name: string;
+  entity_type: string;
+  confidence: number;
+  metadata?: Record<string, any>;
+  mentions: Entity[];
 }
 
 interface Relationship {
@@ -24,8 +37,10 @@ interface Relationship {
   source_entity_id: string;
   target_entity_id: string;
   relationship_type: string;
+  raw_relationship_type?: string;  // Original LLM-generated descriptive type
   confidence: number;
   properties?: Record<string, any>;
+  relationship_label?: string;
 }
 
 interface EntitiesRelationshipsProps {
@@ -33,31 +48,67 @@ interface EntitiesRelationshipsProps {
   entities: Entity[];
 }
 
+// Fixed vocabulary of 20 relationship types - DO NOT MODIFY
+// These must match the backend RELATIONSHIP_TYPES_CANONICAL in app/utils/relationship_types.py
 const RELATIONSHIP_TYPES = [
-  // Technical
-  'COMPONENT_OF',
-  'CONNECTS_TO',
-  'DEPENDS_ON',
-  'REPLACES',
-  'COMPATIBLE_WITH',
-  'TROUBLESHOOTS',
-  'CAUSES',
-  'PREVENTS',
-  'REQUIRES',
-  'RESOLVES',
-  'INDICATES',
-  // Documentation
-  'DEFINES',
-  'DOCUMENTS',
-  'REFERENCES',
-  'TARGETS',
-  // Business
-  'RESPONSIBLE_FOR',
-  'SERVES',
-  'IMPACTS',
-  // Flexible
-  'RELATES_TO',
+  // Core structural relationships (6)
+  'COMPONENT_OF',     // Part-whole relationships
+  'CONNECTED_TO',     // Physical/logical connections
+  'DEPENDS_ON',       // Dependencies
+  'USES',             // Usage relationships
+  'OWNED_BY',         // Ownership
+  'RESPONSIBLE_FOR',  // Accountability
+
+  // Process & flow (4)
+  'CAUSES',           // Causation
+  'PREVENTS',         // Prevention
+  'IMPACTS',          // Impact/influence
+  'MITIGATES',        // Risk mitigation
+
+  // Knowledge & documentation (4)
+  'DEFINES',          // Definitions
+  'DESCRIBES',        // Descriptions
+  'DOCUMENTS',        // Documentation
+  'REFERENCES',       // References/citations
+
+  // State & compatibility (3)
+  'REPLACES',         // Replacement
+  'COMPATIBLE_WITH',  // Compatibility
+  'CONFLICTS_WITH',   // Conflicts
+
+  // Technical operations (2)
+  'MONITORS',         // Monitoring
+  'MEASURES',         // Measurement
+
+  // Flexible catch-all (1)
+  'RELATES_TO',       // For uncategorized relationships
 ];
+
+const RELATIONSHIP_TYPE_ALIASES: Record<string, string> = {
+  'may cause': 'CAUSES',
+  'cause': 'CAUSES',
+  'causes': 'CAUSES',
+  'helps prevent': 'MITIGATES',
+  'helps prevent removal': 'MITIGATES',
+  'helps prevent removal of': 'MITIGATES',
+  'prevents removal of': 'MITIGATES',
+  'prevents': 'PREVENTS',
+  'reduces': 'MITIGATES',
+  'used to clean': 'USES',
+  'used for cleaning': 'USES',
+  'used for': 'USES',
+  'contains': 'COMPONENT_OF',
+  'contain': 'COMPONENT_OF',
+  'contained in': 'COMPONENT_OF',
+  'located in': 'COMPONENT_OF',
+  'located_in': 'COMPONENT_OF',
+  'emits noise from': 'CAUSES',
+  'emits_noise_from': 'CAUSES',
+  'noise amplified when': 'IMPACTS',
+  'noise_amplified_when': 'IMPACTS',
+  'supports': 'RESPONSIBLE_FOR',
+  'support': 'RESPONSIBLE_FOR',
+};
 
 // Entity type color mapping
 const ENTITY_TYPE_COLORS: Record<string, string> = {
@@ -70,6 +121,8 @@ const ENTITY_TYPE_COLORS: Record<string, string> = {
   'product': '#F97316',        // Orange
   'system': '#F59E0B',         // Amber
   'technology': '#EAB308',     // Yellow
+  'material': '#22C55E',       // Green
+  'tool': '#2563EB',           // Blue
   
   // Chemical & Scientific
   'chemical': '#10B981',       // Emerald
@@ -99,6 +152,176 @@ const getEntityTypeColor = (type: string): string => {
   return ENTITY_TYPE_COLORS[type?.toLowerCase()] || ENTITY_TYPE_COLORS['other'];
 };
 
+const KNOWN_ENTITY_TYPES = new Set(Object.keys(ENTITY_TYPE_COLORS));
+
+const normalizeEntityType = (type?: string | null): string | null => {
+  if (!type) {
+    return null;
+  }
+  const lower = type.toLowerCase();
+  return KNOWN_ENTITY_TYPES.has(lower) ? lower : null;
+};
+
+const sanitizeRelationshipType = (type: string): string =>
+  type
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'RELATES_TO';
+
+const canonicalizeRelationshipType = (type?: string | null): string => {
+  if (!type) {
+    return 'RELATES_TO';
+  }
+  const trimmed = type.trim();
+  if (!trimmed) {
+    return 'RELATES_TO';
+  }
+  const lower = trimmed.toLowerCase();
+  const alias = RELATIONSHIP_TYPE_ALIASES[lower];
+  if (alias) {
+    return alias;
+  }
+  return sanitizeRelationshipType(trimmed);
+};
+
+const toTitleCase = (value: string): string =>
+  value
+    .toLowerCase()
+    .split(' ')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+
+const formatRelationshipTypeLabel = (canonicalType: string): string =>
+  toTitleCase(canonicalType.replace(/_/g, ' '));
+
+const getRelationshipDisplayLabel = (
+  rawType: string | null | undefined,
+  canonicalType: string
+): string => {
+  // If we have a descriptive raw type that's different from the canonical, use it
+  if (rawType && rawType.trim()) {
+    const canonicalFromRaw = canonicalizeRelationshipType(rawType);
+    // If the raw type maps to a different canonical type, it's a descriptive label
+    if (canonicalFromRaw !== rawType) {
+      return toTitleCase(rawType.trim().replace(/\s+/g, ' '));
+    }
+    // Otherwise use the formatted canonical
+    return formatRelationshipTypeLabel(canonicalType);
+  }
+  return formatRelationshipTypeLabel(canonicalType);
+};
+
+const formatMetadataValue = (value: any): string => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => formatMetadataValue(item))
+      .filter((item) => item.length > 0)
+      .join(', ');
+  }
+  if (typeof value === 'object') {
+    const inner = Object.entries(value)
+      .map(([key, val]) => {
+        const formatted = formatMetadataValue(val);
+        return formatted.length > 0 ? `${key}: ${formatted}` : '';
+      })
+      .filter(Boolean)
+      .join(', ');
+    return inner;
+  }
+  return String(value);
+};
+
+const collectEntityProperties = (entity: Entity): [string, string][] => {
+  const canonicalMetadata = entity.canonical_metadata ?? {};
+  const mentionMetadata = entity.metadata ?? {};
+  const baseProperties = entity.properties ?? {};
+
+  const IGNORED_TOP_LEVEL = new Set([
+    'chunk_index',
+    'chunking_strategy',
+    'chunk_level',
+    'chunk_id',
+    'document_ids',
+    'relationship_document_ids',
+    'last_refreshed_at',
+    'original_names',
+  ]);
+  const IGNORED_ATTRIBUTE_KEYS = new Set([
+    'chunk_index',
+    'chunking_strategy',
+    'chunk_level',
+    'chunk_id',
+    'summary',
+  ]);
+
+  const combined: Record<string, any> = {
+    ...baseProperties,
+    ...mentionMetadata,
+  };
+
+  const entries: [string, string][] = [];
+  const candidateDescription = [
+    canonicalMetadata?.description,
+    mentionMetadata?.description,
+    baseProperties?.description,
+  ].find(
+    (value): value is string =>
+      typeof value === 'string' && value.trim().length > 0,
+  );
+
+  if (candidateDescription) {
+    entries.push(['description', formatMetadataValue(candidateDescription)]);
+  }
+
+  delete combined.description;
+
+  const detailEntries: [string, string][] = [];
+
+  for (const [key, value] of Object.entries(combined)) {
+    if (key === 'context' || key === 'description' || IGNORED_TOP_LEVEL.has(key)) {
+      continue;
+    }
+
+    if (key === 'attributes' && value && typeof value === 'object') {
+      const attributeEntries = Object.entries(value as Record<string, any>)
+        .filter(([attrKey]) => !IGNORED_ATTRIBUTE_KEYS.has(attrKey))
+        .map(([attrKey, attrValue]) => [attrKey, formatMetadataValue(attrValue)] as [string, string])
+        .filter(([, formatted]) => formatted.length > 0);
+      detailEntries.push(...attributeEntries);
+      continue;
+    }
+
+    const formatted = formatMetadataValue(value);
+    if (!formatted.length) {
+      continue;
+    }
+    detailEntries.push([key, formatted]);
+  }
+
+  entries.push(...detailEntries);
+
+  if (entries.length === 0) {
+    const contextValue = formatMetadataValue(
+      mentionMetadata?.context ?? canonicalMetadata?.context ?? '',
+    );
+    if (contextValue.length > 0) {
+      entries.push(['context', contextValue]);
+    }
+  }
+
+  return entries;
+};
+
 export default function EntitiesRelationships({ documentId, entities }: EntitiesRelationshipsProps) {
   const queryClient = useQueryClient();
   const { notify, confirm, prompt } = useNotification();
@@ -119,6 +342,94 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
     confidence: 100,
   });
   const [showMetadataDialog, setShowMetadataDialog] = useState<string | null>(null);
+  const [showDuplicatesDialog, setShowDuplicatesDialog] = useState(false);
+  const [duplicateGroups, setDuplicateGroups] = useState<any[]>([]);
+  const [isSearchingDuplicates, setIsSearchingDuplicates] = useState(false);
+
+  const canonicalEntities = useMemo<CanonicalEntity[]>(() => {
+    if (!entities || entities.length === 0) {
+      return [];
+    }
+
+    const map = new Map<string, CanonicalEntity>();
+
+    for (const entity of entities) {
+      const canonicalId = entity.canonical_entity_id || entity.id;
+      const displayName = entity.canonical_name || entity.entity_name;
+      const resolvedType = normalizeEntityType(entity.canonical_type)
+        ?? normalizeEntityType(entity.entity_type)
+        ?? 'other';
+      const existing = map.get(canonicalId);
+
+      if (existing) {
+        existing.confidence = Math.max(existing.confidence, entity.confidence);
+        if (!existing.entity_name && displayName) {
+          existing.entity_name = displayName;
+        }
+        if (
+          existing.entity_type === 'other' ||
+          !normalizeEntityType(existing.entity_type)
+        ) {
+          const candidateType = normalizeEntityType(entity.entity_type)
+            ?? (resolvedType !== 'other' ? resolvedType : null);
+          if (candidateType) {
+            existing.entity_type = candidateType;
+          }
+        }
+        if (entity.canonical_metadata) {
+          existing.metadata = entity.canonical_metadata;
+        } else if (!existing.metadata && entity.metadata) {
+          existing.metadata = entity.metadata;
+        }
+        existing.mentions.push(entity);
+      } else {
+        map.set(canonicalId, {
+          id: canonicalId,
+          entity_name: displayName || entity.entity_name,
+          entity_type: resolvedType,
+          confidence: entity.confidence,
+          metadata: entity.canonical_metadata ?? entity.metadata,
+          mentions: [entity],
+        });
+      }
+    }
+
+    return Array.from(map.values());
+  }, [entities]);
+
+  const canonicalEntityMap = useMemo(() => {
+    const map = new Map<string, CanonicalEntity>();
+    for (const entity of canonicalEntities) {
+      map.set(entity.id, entity);
+    }
+    return map;
+  }, [canonicalEntities]);
+
+  const entityMentionMap = useMemo(() => {
+    const map = new Map<string, Entity>();
+    if (entities) {
+      for (const entity of entities) {
+        map.set(entity.id, entity);
+      }
+    }
+    return map;
+  }, [entities]);
+
+  const resolveCanonicalEntity = (identifier: string | null | undefined): CanonicalEntity | undefined => {
+    if (!identifier) {
+      return undefined;
+    }
+    const direct = canonicalEntityMap.get(identifier);
+    if (direct) {
+      return direct;
+    }
+    const mention = entityMentionMap.get(identifier);
+    if (!mention) {
+      return undefined;
+    }
+    const fallbackId = mention.canonical_entity_id || mention.id;
+    return fallbackId ? canonicalEntityMap.get(fallbackId) : undefined;
+  };
 
   // Fetch relationships
   const { data: relationships = [] } = useQuery({
@@ -133,6 +444,33 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
       }
     },
   });
+
+  const normalizedRelationships = useMemo(() => {
+    if (!relationships.length) {
+      return [];
+    }
+    return relationships.map((rel) => {
+      const sourceCanonical = resolveCanonicalEntity(rel.source_entity_id);
+      const targetCanonical = resolveCanonicalEntity(rel.target_entity_id);
+      const relationshipType = canonicalizeRelationshipType(rel.relationship_type);
+      // Use raw_relationship_type if available, otherwise fall back to relationship_type
+      const rawType = rel.raw_relationship_type || rel.relationship_type;
+      return {
+        ...rel,
+        source_entity_id: sourceCanonical?.id || rel.source_entity_id,
+        target_entity_id: targetCanonical?.id || rel.target_entity_id,
+        relationship_type: relationshipType,
+        relationship_label: getRelationshipDisplayLabel(rawType, relationshipType),
+        raw_relationship_type: rawType,
+      };
+    });
+  }, [relationships, canonicalEntityMap, entityMentionMap]);
+
+  // Use fixed vocabulary - no dynamic additions from data
+  const relationshipTypeOptions = useMemo(() => {
+    // Return the fixed list, sorted for consistent UI
+    return [...RELATIONSHIP_TYPES].sort();
+  }, []);
 
   // Update entity mutation
   const updateEntityMutation = useMutation({
@@ -224,22 +562,92 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
     },
   });
 
+  // Find duplicates function
+  const findDuplicates = async (autoMerge: boolean = false) => {
+    setIsSearchingDuplicates(true);
+    try {
+      const response = await documentApi.findDuplicates(documentId, 0.85, autoMerge);
+      
+      if (autoMerge && response.data.merged > 0) {
+        notify(`Auto-merged ${response.data.merged} duplicate entities`, 'success');
+        queryClient.invalidateQueries({ queryKey: ['entities', documentId] });
+        queryClient.invalidateQueries({ queryKey: ['document', documentId] });
+      }
+      
+      if (response.data.duplicates.length > 0) {
+        setDuplicateGroups(response.data.duplicates);
+        setShowDuplicatesDialog(true);
+      } else {
+        notify('No duplicate entities found', 'info');
+      }
+    } catch (error: any) {
+      notify('Failed to find duplicates: ' + (error.message || 'Unknown error'), 'error');
+    } finally {
+      setIsSearchingDuplicates(false);
+    }
+  };
+
+  // Merge duplicate group
+  const mergeDuplicateGroup = async (group: any) => {
+    try {
+      const entityIds = group.entities.map((e: any) => e.id);
+      const targetName = group.entities[0].entity_name;
+      const targetType = group.entities[0].entity_type;
+      
+      await documentApi.mergeEntities(entityIds, targetName, targetType);
+      
+      notify(`Merged ${entityIds.length} entities`, 'success');
+      
+      // Refresh data
+      queryClient.invalidateQueries({ queryKey: ['entities', documentId] });
+      queryClient.invalidateQueries({ queryKey: ['document', documentId] });
+      
+      // Remove merged group from list
+      setDuplicateGroups(prev => prev.filter(g => g !== group));
+      
+      if (duplicateGroups.length <= 1) {
+        setShowDuplicatesDialog(false);
+      }
+    } catch (error: any) {
+      notify('Failed to merge entities: ' + (error.message || 'Unknown error'), 'error');
+    }
+  };
+
   // Filter entities
-  const filteredEntities = entities?.filter(entity => {
-    if (filterType !== 'all' && entity.entity_type !== filterType) {
-      return false;
-    }
-    if (entity.confidence * 100 < minConfidence) {
-      return false;
-    }
-    return true;
-  });
+  // Get unique entity types for filter (canonical view)
+  const entityTypes = useMemo(
+    () => [...new Set(canonicalEntities.map((entity) => entity.entity_type).filter(Boolean))],
+    [canonicalEntities]
+  );
 
-  // Get unique entity types for filter
-  const entityTypes = [...new Set(entities?.map(e => e.entity_type) || [])];
+  // Get entity mention by ID
+  const getMentionById = (id: string) => entityMentionMap.get(id);
 
-  // Get entity by ID
-  const getEntityById = (id: string) => entities?.find(e => e.id === id);
+  const filteredCanonicalEntities = useMemo(() => {
+    if (!canonicalEntities.length) {
+      return [];
+    }
+    return canonicalEntities.filter((entity) => {
+      if (filterType !== 'all' && entity.entity_type !== filterType) {
+        return false;
+      }
+      if (entity.confidence * 100 < minConfidence) {
+        return false;
+      }
+      return true;
+    });
+  }, [canonicalEntities, filterType, minConfidence]);
+
+  const graphEntities = useMemo(() =>
+    filteredCanonicalEntities.map((entity) => ({
+      id: entity.id,
+      entity_name: entity.entity_name,
+      entity_type: entity.entity_type,
+      confidence: entity.confidence,
+      metadata: entity.metadata ?? {},
+    })),
+    [filteredCanonicalEntities]
+  );
 
   return (
     <div className="space-y-6">
@@ -293,6 +701,25 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                   </select>
                 </div>
                 <button
+                  onClick={() => findDuplicates(false)}
+                  disabled={isSearchingDuplicates || !entities || entities.length < 2}
+                  style={{
+                    backgroundColor: 'white',
+                    color: '#9B59B6',
+                    border: '1px solid #D4B5E0',
+                    padding: '8px 16px',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    marginLeft: '12px',
+                    opacity: isSearchingDuplicates || !entities || entities.length < 2 ? 0.5 : 1,
+                    cursor: isSearchingDuplicates || !entities || entities.length < 2 ? 'not-allowed' : 'pointer'
+                  }}
+                  className="hover:bg-purple-50"
+                  title="Find duplicate entities"
+                >
+                  {isSearchingDuplicates ? 'Searching...' : '🔍 Find Duplicates'}
+                </button>
+                <button
                   onClick={() => setShowAddEntity(!showAddEntity)}
                   style={{
                     backgroundColor: 'white',
@@ -301,7 +728,7 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                     padding: '8px 16px',
                     fontSize: '14px',
                     fontWeight: '500',
-                    marginLeft: '12px'
+                    marginLeft: '8px'
                   }}
                   className="hover:bg-blue-50"
                 >
@@ -484,7 +911,7 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                     fontWeight: '600',
                     color: '#2C3E50'
                   }}>
-                    Context
+                    Properties
                   </th>
                   <th style={{ 
                     padding: '12px', 
@@ -508,21 +935,42 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                 </tr>
               </thead>
               <tbody>
-                {filteredEntities?.map((entity) => (
+                {filteredCanonicalEntities.map((canonical) => {
+                  const representative = canonical.mentions[0];
+                  const displayEntity: Entity = representative
+                    ? {
+                        ...representative,
+                        entity_name: canonical.entity_name,
+                        entity_type: canonical.entity_type,
+                        confidence: canonical.confidence,
+                        canonical_metadata: canonical.metadata ?? {},
+                        canonical_entity_id: canonical.id,
+                      }
+                    : {
+                        id: canonical.id,
+                        entity_name: canonical.entity_name,
+                        entity_type: canonical.entity_type,
+                        confidence: canonical.confidence,
+                        metadata: canonical.metadata ?? {},
+                        canonical_metadata: canonical.metadata ?? {},
+                        canonical_entity_id: canonical.id,
+                      } as Entity;
+
+                  return (
                   <tr 
-                    key={entity.id} 
+                    key={canonical.id} 
                     style={{ 
                       borderBottom: '1px solid #F0EDE5',
                       transition: 'background-color 0.2s',
                       cursor: 'pointer'
                     }}
                     className="hover:bg-gray-50"
-                    onClick={() => setSelectedEntity(entity)}
+                    onClick={() => representative && setSelectedEntity(representative)}
                   >
                     <td style={{ padding: '12px' }}>
                       <span 
                         style={{ 
-                          backgroundColor: getEntityTypeColor(entity.entity_type),
+                          backgroundColor: getEntityTypeColor(canonical.entity_type),
                           color: 'white',
                           padding: '2px 8px',
                           borderRadius: '4px',
@@ -531,37 +979,48 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                           textTransform: 'uppercase'
                         }}
                       >
-                        {entity.entity_type}
+                        {canonical.entity_type}
                       </span>
                     </td>
                     <td style={{ padding: '12px', fontWeight: '500', color: '#2C3E50' }}>
-                      {entity.entity_name}
+                      {canonical.entity_name}
                     </td>
                     <td style={{ 
                       padding: '12px', 
                       color: '#7F8C8D',
-                      fontSize: '13px',
-                      fontStyle: 'italic'
+                      fontSize: '13px'
                     }}>
-                      {entity.metadata?.context ? (
-                        <div style={{ 
-                          maxWidth: '400px',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap'
-                        }}>
-                          "{entity.metadata.context}"
-                        </div>
-                      ) : (
-                        <span style={{ opacity: 0.5 }}>No context available</span>
-                      )}
+                      {(() => {
+                        const propertyEntries = collectEntityProperties(displayEntity).slice(0, 3);
+                        if (propertyEntries.length === 0) {
+                          return <span style={{ opacity: 0.5 }}>No properties available</span>;
+                        }
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            {propertyEntries.map(([key, value], index) => (
+                              <div
+                                key={`${key}-${index}`}
+                                style={{
+                                  whiteSpace: 'normal',
+                                  overflow: 'visible',
+                                  textOverflow: 'clip'
+                                }}
+                                title={`${key}: ${value}`}
+                              >
+                                <span style={{ fontWeight: 600, color: '#2C3E50' }}>{key}:</span>{' '}
+                                <span>{value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td style={{ 
                       padding: '12px',
                       textAlign: 'left',
                       color: '#7F8C8D'
                     }}>
-                      {(entity.confidence * 100).toFixed(0)}%
+                      {(canonical.confidence * 100).toFixed(0)}%
                     </td>
                     <td style={{ 
                       padding: '12px',
@@ -570,8 +1029,8 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                       <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
                         <button
                           onClick={(e) => {
-                            e.stopPropagation();
-                            setShowMetadataDialog(entity.id);
+                           e.stopPropagation();
+                            setShowMetadataDialog(representative?.id ?? canonical.id);
                           }}
                           style={{ 
                             color: '#3498DB', 
@@ -595,13 +1054,17 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                         <button
                           onClick={async (e) => {
                             e.stopPropagation();
+                            if (!representative) {
+                              notify('Cannot edit canonical entity without a source mention', 'warning');
+                              return;
+                            }
                             const newName = await prompt(
-                              `Edit entity "${entity.entity_name}"\nType: ${entity.entity_type}`,
-                              entity.entity_name
+                              `Edit entity "${canonical.entity_name}"\nType: ${canonical.entity_type}`,
+                              canonical.entity_name
                             );
-                            if (newName && newName !== entity.entity_name) {
+                            if (newName && newName !== canonical.entity_name) {
                               updateEntityMutation.mutate({
-                                entityId: entity.id,
+                                entityId: representative.id,
                                 data: { entity_name: newName }
                               });
                             }
@@ -628,11 +1091,15 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                         <button
                           onClick={async (e) => {
                             e.stopPropagation();
+                            if (!representative) {
+                              notify('Cannot delete canonical entity without a source mention', 'warning');
+                              return;
+                            }
                             const confirmed = await confirm(
-                              `Delete entity "${entity.entity_name}"?\nType: ${entity.entity_type}`
+                              `Delete entity "${canonical.entity_name}"?\nType: ${canonical.entity_type}`
                             );
                             if (confirmed) {
-                              deleteEntityMutation.mutate(entity.id);
+                              deleteEntityMutation.mutate(representative.id);
                             }
                           }}
                           style={{ 
@@ -657,11 +1124,12 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                       </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-            
-            {filteredEntities?.length === 0 && (
+                  );
+                })}
+             </tbody>
+           </table>
+           
+            {filteredCanonicalEntities.length === 0 && (
               <div style={{
                 padding: '32px',
                 textAlign: 'center',
@@ -715,7 +1183,7 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                   }}
                 >
                   <option value="">Select source entity...</option>
-                  {entities?.map(entity => (
+                  {canonicalEntities.map(entity => (
                     <option key={entity.id} value={entity.id}>
                       {entity.entity_name} ({entity.entity_type})
                     </option>
@@ -735,8 +1203,8 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                     minWidth: '160px'
                   }}
                 >
-                  {RELATIONSHIP_TYPES.map(type => (
-                    <option key={type} value={type}>{type}</option>
+                  {relationshipTypeOptions.map(type => (
+                    <option key={type} value={type}>{formatRelationshipTypeLabel(type)}</option>
                   ))}
                 </select>
                 
@@ -754,7 +1222,7 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                   }}
                 >
                   <option value="">Select target entity...</option>
-                  {entities?.map(entity => (
+                  {canonicalEntities.map(entity => (
                     <option key={entity.id} value={entity.id}>
                       {entity.entity_name} ({entity.entity_type})
                     </option>
@@ -768,8 +1236,8 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                         source_entity_id: newRelationship.sourceEntity,
                         target_entity_id: newRelationship.targetEntity,
                         relationship_type: newRelationship.type,
-                        confidence: 1.0,
-                        manual: true,
+                        confidence_score: 1.0,
+                        metadata: { manual: true },
                       });
                     } else {
                       notify('Please select both source and target entities', 'warning');
@@ -852,9 +1320,11 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
               </thead>
               <tbody>
                 {relationships?.map((rel: Relationship) => {
-                  const sourceEntity = getEntityById(rel.source_entity_id);
-                  const targetEntity = getEntityById(rel.target_entity_id);
-                  
+                  const sourceCanonical = resolveCanonicalEntity(rel.source_entity_id);
+                  const targetCanonical = resolveCanonicalEntity(rel.target_entity_id);
+                  const normalizedSourceId = sourceCanonical?.id || rel.source_entity_id || '';
+                  const normalizedTargetId = targetCanonical?.id || rel.target_entity_id || '';
+
                   return (
                     <tr key={rel.id} style={{ 
                       borderBottom: '1px solid #F0EDE5',
@@ -864,7 +1334,7 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                     >
                       <td style={{ padding: '12px' }}>
                         <select
-                          value={rel.source_entity_id}
+                          value={normalizedSourceId}
                           onChange={(e) => updateRelationshipMutation.mutate({
                             id: rel.id,
                             source_entity_id: e.target.value
@@ -882,7 +1352,14 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                           }}
                           className="hover:border-blue-400 focus:outline-none focus:border-blue-500"
                         >
-                          {entities?.map(entity => (
+                          {normalizedSourceId && !canonicalEntityMap.has(normalizedSourceId) && (
+                            <option value={normalizedSourceId}>
+                              {sourceCanonical
+                                ? `${sourceCanonical.entity_name} (${sourceCanonical.entity_type})`
+                                : `Unknown entity (${normalizedSourceId})`}
+                            </option>
+                          )}
+                          {canonicalEntities.map(entity => (
                             <option key={entity.id} value={entity.id}>
                               {entity.entity_name} ({entity.entity_type})
                             </option>
@@ -890,33 +1367,63 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                         </select>
                       </td>
                       <td style={{ padding: '12px' }}>
-                        <select
-                          value={rel.relationship_type}
-                          onChange={(e) => updateRelationshipMutation.mutate({
-                            id: rel.id,
-                            relationship_type: e.target.value
-                          })}
-                          style={{
-                            width: '100%',
-                            padding: '8px 12px',
-                            paddingRight: '36px',
-                            border: '1px solid #E1E8ED',
-                            borderRadius: '4px',
-                            backgroundColor: 'white',
-                            color: '#2C3E50',
-                            fontSize: '13px',
-                            cursor: 'pointer'
-                          }}
-                          className="hover:border-blue-400 focus:outline-none focus:border-blue-500"
-                        >
-                          {RELATIONSHIP_TYPES.map(type => (
-                            <option key={type} value={type}>{type}</option>
-                          ))}
-                        </select>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <select
+                            value={rel.relationship_type}
+                            onChange={(e) => updateRelationshipMutation.mutate({
+                              id: rel.id,
+                              relationship_type: e.target.value
+                            })}
+                            style={{
+                              flex: 1,
+                              padding: '8px 12px',
+                              paddingRight: '36px',
+                              border: '1px solid #E1E8ED',
+                              borderRadius: '4px',
+                              backgroundColor: 'white',
+                              color: '#2C3E50',
+                              fontSize: '13px',
+                              cursor: 'pointer'
+                            }}
+                            className="hover:border-blue-400 focus:outline-none focus:border-blue-500"
+                          >
+                            {/* Show the current relationship with its display label */}
+                            <option value={rel.relationship_type}>
+                              {rel.relationship_label || formatRelationshipTypeLabel(rel.relationship_type)}
+                            </option>
+                            {/* Show other available options */}
+                            {relationshipTypeOptions
+                              .filter(type => type !== rel.relationship_type)
+                              .map(type => (
+                                <option key={type} value={type}>
+                                  {formatRelationshipTypeLabel(type)}
+                                </option>
+                              ))}
+                          </select>
+                          {/* Show indicator if using descriptive (non-canonical) label */}
+                          {rel.raw_relationship_type &&
+                           rel.raw_relationship_type !== rel.relationship_type && (
+                            <span
+                              title={`LLM suggested: "${rel.raw_relationship_type}" → Canonical: "${rel.relationship_type}"`}
+                              style={{
+                                color: '#6B7280',
+                                fontSize: '11px',
+                                cursor: 'help',
+                                padding: '2px 4px',
+                                backgroundColor: '#F3F4F6',
+                                borderRadius: '3px',
+                                border: '1px solid #E5E7EB',
+                                whiteSpace: 'nowrap'
+                              }}
+                            >
+                              ℹ️
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td style={{ padding: '12px' }}>
                         <select
-                          value={rel.target_entity_id}
+                          value={normalizedTargetId}
                           onChange={(e) => updateRelationshipMutation.mutate({
                             id: rel.id,
                             target_entity_id: e.target.value
@@ -934,7 +1441,14 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
                           }}
                           className="hover:border-blue-400 focus:outline-none focus:border-blue-500"
                         >
-                          {entities?.map(entity => (
+                          {normalizedTargetId && !canonicalEntityMap.has(normalizedTargetId) && (
+                            <option value={normalizedTargetId}>
+                              {targetCanonical
+                                ? `${targetCanonical.entity_name} (${targetCanonical.entity_type})`
+                                : `Unknown entity (${normalizedTargetId})`}
+                            </option>
+                          )}
+                          {canonicalEntities.map(entity => (
                             <option key={entity.id} value={entity.id}>
                               {entity.entity_name} ({entity.entity_type})
                             </option>
@@ -1000,14 +1514,14 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
       <div style={{ border: '1px solid #E1E8ED', padding: '20px' }}>
         <h3 className="font-bold mb-4" style={{ color: '#2C3E50' }}>Graph Preview</h3>
         <GraphPreview 
-          entities={filteredEntities || []} 
-          relationships={relationships || []} 
+          entities={graphEntities} 
+          relationships={normalizedRelationships} 
         />
       </div>
 
       {/* Metadata Dialog */}
       {showMetadataDialog && (() => {
-        const entity = entities?.find(e => e.id === showMetadataDialog);
+        const entity = showMetadataDialog ? getMentionById(showMetadataDialog) : undefined;
         if (!entity) return null;
         
         return (
@@ -1135,6 +1649,163 @@ export default function EntitiesRelationships({ documentId, entities }: Entities
           </div>
         );
       })()}
+      
+      {/* Duplicates Dialog */}
+      {showDuplicatesDialog && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '8px',
+            padding: '24px',
+            maxWidth: '800px',
+            maxHeight: '80vh',
+            overflow: 'auto',
+            width: '90%'
+          }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '20px'
+            }}>
+              <h3 style={{ fontSize: '20px', fontWeight: '600', color: '#2C3E50' }}>
+                Duplicate Entities Found ({duplicateGroups.length} groups)
+              </h3>
+              <button
+                onClick={() => setShowDuplicatesDialog(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  color: '#7F8C8D'
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <button
+                onClick={() => findDuplicates(true)}
+                style={{
+                  backgroundColor: '#27AE60',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '8px 16px',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  cursor: 'pointer',
+                  marginRight: '8px'
+                }}
+                className="hover:bg-green-600"
+              >
+                Auto-Merge All (≥95% Similar)
+              </button>
+              <span style={{ color: '#7F8C8D', fontSize: '14px' }}>
+                Only very similar entities will be merged automatically
+              </span>
+            </div>
+
+            {duplicateGroups.map((group, index) => (
+              <div key={index} style={{
+                border: '1px solid #E1E8ED',
+                borderRadius: '8px',
+                padding: '16px',
+                marginBottom: '16px',
+                backgroundColor: '#FAFBFC'
+              }}>
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: '12px'
+                }}>
+                  <div>
+                    <span style={{
+                      backgroundColor: group.similarity >= 0.95 ? '#D4EFDF' : 
+                                       group.similarity >= 0.9 ? '#FCF3CF' : '#FADBD8',
+                      color: group.similarity >= 0.95 ? '#27AE60' : 
+                             group.similarity >= 0.9 ? '#F39C12' : '#E74C3C',
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      fontSize: '12px',
+                      fontWeight: '600'
+                    }}>
+                      {(group.similarity * 100).toFixed(0)}% Similar
+                    </span>
+                    <span style={{
+                      marginLeft: '8px',
+                      color: '#7F8C8D',
+                      fontSize: '12px'
+                    }}>
+                      {group.entities.length} entities
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => mergeDuplicateGroup(group)}
+                    style={{
+                      backgroundColor: '#3498DB',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      padding: '6px 12px',
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      cursor: 'pointer'
+                    }}
+                    className="hover:bg-blue-600"
+                  >
+                    Merge Group
+                  </button>
+                </div>
+                
+                <div style={{ fontSize: '14px' }}>
+                  {group.names.map((name: string, i: number) => (
+                    <div key={i} style={{
+                      padding: '4px 0',
+                      color: '#2C3E50'
+                    }}>
+                      • {name}
+                      {group.entities[i].entity_type && (
+                        <span style={{
+                          marginLeft: '8px',
+                          color: '#7F8C8D',
+                          fontSize: '12px'
+                        }}>
+                          ({group.entities[i].entity_type})
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+
+            {duplicateGroups.length === 0 && (
+              <div style={{
+                textAlign: 'center',
+                padding: '40px',
+                color: '#7F8C8D'
+              }}>
+                No duplicates remaining
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

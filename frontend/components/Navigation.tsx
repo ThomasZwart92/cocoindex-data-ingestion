@@ -8,6 +8,7 @@ export default function Navigation() {
 
   const navItems = [
     { href: '/', label: 'Dashboard' },
+    { href: '/query', label: 'Query' },
     { href: '/queue', label: 'Queue' },
     { href: '/settings', label: 'Settings' },
     { href: '/styling', label: 'Styling' },

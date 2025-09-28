@@ -1,0 +1,121 @@
+    async def _call_openai(
+        self,
+        prompt: str,
+        model: Optional[str],
+        temperature: float,
+        max_tokens: int,
+        timeout: int,
+        system_prompt: Optional[str]
+    ) -> LLMResponse:
+        """Call OpenAI API"""
+        if not self.openai_async:
+            raise ValueError("OpenAI client not configured")
+        
+        model = model or LLMModel.GPT_4O_MINI.value
+        
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        
+        # Use asyncio timeout
+        async with asyncio.timeout(timeout):
+            kwargs: Dict[str, Any] = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+            }
+            # Some models (e.g., gpt-5) do not support 'max_tokens' in Chat Completions
+            if not str(model).startswith("gpt-5"):
+                kwargs["max_tokens"] = max_tokens
+            response = await self.openai_async.chat.completions.create(**kwargs)
+        
+        return LLMResponse(
+            content=response.choices[0].message.content,
+            provider=LLMProvider.OPENAI,
+            model=model,
+            usage={
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens
+            },
+            latency_ms=0  # Will be set by caller
+        )
+    
+    async def _call_gemini(
+        self,
+        prompt: str,
+        model: Optional[str],
+        temperature: float,
+        max_tokens: int,
+        timeout: int,
+        system_prompt: Optional[str]
+    ) -> LLMResponse:
+        """Call Gemini API"""
+        if not self.gemini_client:
+            raise ValueError("Gemini client not configured")
+        
+        # Combine system prompt with user prompt for Gemini
+        full_prompt = prompt
+        if system_prompt:
+            full_prompt = f"{system_prompt}\n\n{prompt}"
+        
+        # Gemini requires minimum 1000 tokens to generate any output
+        # If less than 1000, increase to minimum working value
+        effective_max_tokens = max(max_tokens, 1000)
+        if max_tokens < 1000:
+            logger.info(f"Increasing Gemini max_tokens from {max_tokens} to {effective_max_tokens} (minimum required)")
+        
+        # Gemini uses different parameter names
+        generation_config = genai.types.GenerationConfig(
+            temperature=temperature,
+            max_output_tokens=effective_max_tokens
+        )
+        
+        # Define less restrictive safety settings for business use cases
+        safety_settings = {
+            "HARM_CATEGORY_HARASSMENT": "BLOCK_ONLY_HIGH",
+            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_ONLY_HIGH",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_ONLY_HIGH",
+            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_ONLY_HIGH",
+        }
+        
+        # Run in executor to make it async with timeout
+        loop = asyncio.get_event_loop()
+        
+        async with asyncio.timeout(timeout):
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.gemini_client.generate_content(
+                    full_prompt,
+                    generation_config=generation_config,
+                    safety_settings=safety_settings
+                )
+            )
+        
+        # Check if response was blocked or empty
+        if not response.candidates or not response.candidates[0].content.parts:
+            # Get the finish reason if available
+            finish_reason = response.candidates[0].finish_reason if response.candidates else None
+            
+            # Handle numeric finish_reason (older API versions or direct proto values)
+            if isinstance(finish_reason, int):
+                reason_map = {
+                    0: "FINISH_REASON_UNSPECIFIED",
+                    1: "STOP",
+                    2: "MAX_TOKENS",
+                    3: "SAFETY",
+                    4: "RECITATION",
+                    5: "OTHER"
+                }
+                finish_reason_name = reason_map.get(finish_reason, f"UNKNOWN_{finish_reason}")
+            elif finish_reason:
+                finish_reason_name = finish_reason.name if hasattr(finish_reason, 'name') else str(finish_reason)
+            else:
+                finish_reason_name = "Unknown"
+            
+            if finish_reason_name == 'SAFETY':
+                # Response was blocked due to safety
+                safety_ratings = response.candidates[0].safety_ratings if response.candidates else []
+                logger.warning(f"Gemini response blocked by safety filters. Ratings: {safety_ratings}")
+                raise ValueError(f"Content blocked by safety filters. Finish reason: SAFETY")

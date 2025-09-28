@@ -8,6 +8,7 @@ from dataclasses import dataclass, asdict
 from concurrent.futures import TimeoutError
 import time
 
+import httpx
 from openai import OpenAI, AsyncOpenAI
 import google.generativeai as genai
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -28,6 +29,13 @@ class LLMModel(Enum):
     GPT_4O_MINI = "gpt-4o-mini"
     GPT_4_TURBO = "gpt-4-turbo-preview"
     GPT_35_TURBO = "gpt-3.5-turbo"
+    
+    # GPT-5 models (Released August 2025, knowledge cutoff Sept 2024)
+    # GPT-5 is a unified system with smart routing between models
+    GPT_5 = "gpt-5"  # Standard model, balanced reasoning and speed
+    GPT_5_THINKING = "gpt-5-thinking"  # Extended reasoning mode (aka GPT-5 Pro) 
+    GPT_5_MINI = "gpt-5-mini"  # Faster, cheaper for everyday queries
+    GPT_5_NANO = "gpt-5-nano"  # Ultra-lightweight for mobile/embedded
     
     # Gemini models
     GEMINI_25_PRO = "gemini-2.5-pro"
@@ -102,7 +110,9 @@ class LLMService:
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2000,
-        timeout: int = 30,
+        max_completion_tokens: int | None = None,
+        reasoning_effort: str | None = None,
+        timeout: int = 60,
         system_prompt: Optional[str] = None
     ) -> LLMResponse:
         """
@@ -125,7 +135,14 @@ class LLMService:
         try:
             if provider == LLMProvider.OPENAI:
                 response = await self._call_openai(
-                    prompt, model, temperature, max_tokens, timeout, system_prompt
+                    prompt,
+                    model,
+                    temperature,
+                    max_tokens,
+                    max_completion_tokens,
+                    reasoning_effort,
+                    timeout,
+                    system_prompt,
                 )
             elif provider == LLMProvider.GEMINI:
                 response = await self._call_gemini(
@@ -158,6 +175,8 @@ class LLMService:
         model: Optional[str],
         temperature: float,
         max_tokens: int,
+        max_completion_tokens: int | None,
+        reasoning_effort: str | None,
         timeout: int,
         system_prompt: Optional[str]
     ) -> LLMResponse:
@@ -171,28 +190,88 @@ class LLMService:
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
-        
+
         # Use asyncio timeout
         async with asyncio.timeout(timeout):
-            response = await self.openai_async.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-        
-        return LLMResponse(
-            content=response.choices[0].message.content,
-            provider=LLMProvider.OPENAI,
-            model=model,
-            usage={
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens
-            },
-            latency_ms=0  # Will be set by caller
-        )
-    
+            if str(model).startswith("gpt-5"):
+                formatted_messages = []
+                for m in messages:
+                    formatted_messages.append({
+                        "role": m["role"],
+                        "content": [{"type": "input_text", "text": m["content"]}],
+                    })
+                if not settings.openai_api_key:
+                    raise ValueError("OpenAI API key not configured")
+                response_payload: Dict[str, Any] = {
+                    "model": model,
+                    "input": formatted_messages,
+                    "max_output_tokens": max_completion_tokens or max_tokens,
+                }
+                effort = reasoning_effort or "minimal"
+                if effort:
+                    response_payload["reasoning"] = {"effort": effort}
+
+                headers = {
+                    "Authorization": f"Bearer {settings.openai_api_key}",
+                    "Content-Type": "application/json",
+                }
+                async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+                    resp = await client.post(
+                        "https://api.openai.com/v1/responses",
+                        headers=headers,
+                        json=response_payload,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+
+                output_text = data.get("output_text")
+                if not output_text:
+                    chunks: List[str] = []
+                    for item in data.get("output", []) or []:
+                        for block in item.get("content", []):
+                            if block.get("type") == "output_text":
+                                chunks.append(block.get("text", ""))
+                            elif block.get("type") == "text":
+                                chunks.append(block.get("text", ""))
+                    output_text = "\n".join(part for part in chunks if part)
+
+                usage = data.get("usage", {}) or {}
+                return LLMResponse(
+                    content=output_text,
+                    provider=LLMProvider.OPENAI,
+                    model=model,
+                    usage={
+                        "prompt_tokens": usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage.get("completion_tokens", 0),
+                        "total_tokens": usage.get("total_tokens", 0),
+                    },
+                    latency_ms=0,
+                )
+            else:
+                kwargs: Dict[str, Any] = {
+                    "model": model,
+                    "messages": messages,
+                }
+                limit = max_completion_tokens if max_completion_tokens is not None else max_tokens
+                kwargs["max_tokens"] = limit
+                if temperature is not None:
+                    kwargs["temperature"] = temperature
+                if reasoning_effort is not None:
+                    kwargs["reasoning_effort"] = reasoning_effort
+                response = await self.openai_async.chat.completions.create(**kwargs)
+
+                return LLMResponse(
+                    content=response.choices[0].message.content,
+                    provider=LLMProvider.OPENAI,
+                    model=model,
+                    usage={
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens
+                    },
+                    latency_ms=0  # Will be set by caller
+                )
+
     async def _call_gemini(
         self,
         prompt: str,
@@ -388,7 +467,7 @@ class LLMService:
                 model=model,
                 temperature=0.3,  # Lower temperature for structured extraction
                 system_prompt=system_prompt,
-                timeout=30
+                timeout=60
             )
             
             # Parse JSON response - handle both raw JSON and markdown-wrapped JSON
@@ -471,6 +550,8 @@ class LLMService:
         - PROBLEM: Issues, failures, errors, symptoms, defects
         - CONDITION: States of wear, degradation, or quality (corrosion, contamination, wear)
         - STATE: Operational modes or statuses (active, locked, failed, operational)
+        - TOOL: Physical or software tools used in procedures (screwdrivers, software, equipment)
+        - MATERIAL: Raw materials, supplies, consumables (cloth, paper, adhesives)
         - CONCEPT: Domain-specific abstract ideas
         - EVENT: Incidents, occurrences, milestones
 
@@ -494,7 +575,7 @@ class LLMService:
 
         Return a JSON array where each entity has:
         - name: The exact term as it appears
-        - type: One of [PERSON, ORGANIZATION, LOCATION, DATE, PRODUCT, COMPONENT, TECHNOLOGY, CHEMICAL, PROCEDURE, SPECIFICATION, SYSTEM, MEASUREMENT, PROBLEM, CONDITION, STATE, CONCEPT, EVENT]
+        - type: One of [PERSON, ORGANIZATION, LOCATION, DATE, PRODUCT, COMPONENT, TECHNOLOGY, CHEMICAL, PROCEDURE, SPECIFICATION, SYSTEM, MEASUREMENT, PROBLEM, CONDITION, STATE, TOOL, MATERIAL, CONCEPT, EVENT]
         - confidence: 0.0 to 1.0
         - context: Brief context where found (optional)
         
@@ -509,7 +590,7 @@ class LLMService:
                 model=model,
                 temperature=0.1,  # Very low temperature for consistent extraction
                 system_prompt=system_prompt,
-                timeout=30
+                timeout=60
             )
             
             # Parse JSON response - handle both raw JSON and markdown-wrapped JSON
@@ -566,7 +647,46 @@ class LLMService:
                     continue
                 
                 # Create entity with proper type mapping
-                entity_type = e.get("type", "UNKNOWN").upper()
+                entity_type = e.get("type", "OTHER").upper()
+                
+                # Validate entity type against allowed types
+                allowed_types = {
+                    "PERSON", "ORGANIZATION", "LOCATION", "DATE", "PRODUCT", 
+                    "COMPONENT", "TECHNOLOGY", "CHEMICAL", "PROCEDURE", 
+                    "SPECIFICATION", "SYSTEM", "MEASUREMENT", "PROBLEM", 
+                    "CONDITION", "STATE", "TOOL", "MATERIAL", "CONCEPT", 
+                    "EVENT", "OTHER"
+                }
+                
+                # If the type is not in allowed types, map it to the closest match or OTHER
+                if entity_type not in allowed_types:
+                    # Try to map common incorrect types to correct ones
+                    type_mapping = {
+                        "ISSUETYPE": "PROBLEM",
+                        "ISSUE": "PROBLEM",
+                        "ERROR": "PROBLEM",
+                        "SYMPTOM": "PROBLEM",
+                        "DEFECT": "PROBLEM",
+                        "FAILURE": "PROBLEM",
+                        "HARDWARECONNECTION": "COMPONENT",
+                        "CONNECTION": "COMPONENT",
+                        "CONNECTOR": "COMPONENT",
+                        "CLEANINGAGENT": "CHEMICAL",
+                        "CLEANER": "CHEMICAL",
+                        "SUBSTANCE": "CHEMICAL",
+                        "METHOD": "PROCEDURE",
+                        "PROCESS": "PROCEDURE",
+                        "TECHNIQUE": "PROCEDURE",
+                        "EQUIPMENT": "TOOL",
+                        "INSTRUMENT": "TOOL",
+                        "SUPPLY": "MATERIAL",
+                        "CONSUMABLE": "MATERIAL"
+                    }
+                    
+                    # Check if we can map it
+                    mapped_type = type_mapping.get(entity_type, "OTHER")
+                    logger.warning(f"Invalid entity type '{entity_type}' mapped to '{mapped_type}'")
+                    entity_type = mapped_type
                 
                 filtered_entities.append(
                     Entity(
@@ -619,7 +739,7 @@ class LLMService:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     system_prompt=system_prompt,
-                    timeout=30
+                    timeout=60
                 )
             except Exception as e:
                 logger.error(f"OpenAI comparison failed: {e}")
@@ -635,7 +755,7 @@ class LLMService:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     system_prompt=system_prompt,
-                    timeout=30
+                    timeout=60
                 )
             except Exception as e:
                 logger.error(f"Gemini comparison failed: {e}")

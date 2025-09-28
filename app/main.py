@@ -15,7 +15,7 @@ import time
 import logging
 from contextlib import asynccontextmanager
 
-from app.api import documents, processing, chunks, entities, relationships, bridge, sse
+from app.api import documents, documents_review, processing, chunks, entities, relationships, bridge, sse, search, query
 # Temporarily disabled due to import issues: search, ingestion
 from app.config import settings
 from app.services.neo4j_service import Neo4jService
@@ -36,9 +36,12 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up application...")
     
     # Initialize database connections
-    neo4j = Neo4jService()
-    await neo4j.connect()
-    await neo4j.ensure_constraints()
+    try:
+        neo4j = Neo4jService()
+        await neo4j.connect()
+        await neo4j.ensure_constraints()
+    except Exception as e:
+        logger.warning(f"Neo4j connection failed (continuing without it): {e}")
     
     qdrant = QdrantService()
     # Ensure collections exist
@@ -53,15 +56,31 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down application...")
-    await neo4j.close()
+    try:
+        await neo4j.close()
+    except:
+        pass  # Neo4j might not have been initialized
     logger.info("Application shutdown complete")
 
 
 # Create FastAPI app
+tags_metadata = [
+    {"name": "documents", "description": "Manage documents: list, fetch, update, process, and progress."},
+    {"name": "Document Review", "description": "Approve or reject processed documents; check review status."},
+    {"name": "processing", "description": "Processing jobs and streaming status updates."},
+    {"name": "chunks", "description": "Chunk management: view and edit chunks for documents."},
+    {"name": "entities", "description": "Entity management: create, update, delete, and quality review."},
+    {"name": "relationships", "description": "Create and manage relationships between entities."},
+    {"name": "bridge", "description": "Bridge endpoints for graph/search integrations (Supabase/Qdrant/Neo4j)."},
+    {"name": "sse", "description": "Server-Sent Events streams for realtime updates."},
+    {"name": "search", "description": "Search endpoints (hybrid vector + BM25)."},
+]
+
 app = FastAPI(
     title="Data Ingestion Portal API",
     description="High-quality document ingestion with human-in-the-loop review",
     version="1.0.0",
+    openapi_tags=tags_metadata,
     lifespan=lifespan
 )
 
@@ -92,15 +111,18 @@ async def add_process_time_header(request: Request, call_next):
 
 
 # Include routers
-# Temporarily disabled: app.include_router(search.router)
+# Enable search API
+app.include_router(search.router)
 # Temporarily disabled: app.include_router(ingestion.router)
 app.include_router(documents.router)
+app.include_router(documents_review.router, prefix="/api/documents", tags=["Document Review"])
 app.include_router(processing.router)
 app.include_router(chunks.router)
 app.include_router(entities.router)
 app.include_router(relationships.router)
 app.include_router(bridge.router)  # API Bridge for Qdrant/Neo4j data
 app.include_router(sse.router)  # Server-Sent Events for real-time updates
+app.include_router(query.router)
 
 
 # Root endpoint
@@ -145,7 +167,7 @@ async def health_check():
     # Check Qdrant
     try:
         qdrant = QdrantService()
-        collections = await qdrant.get_collections()
+        collections = await qdrant.async_client.get_collections()
         health_status["services"]["qdrant"] = "healthy"
     except Exception as e:
         health_status["services"]["qdrant"] = f"error: {str(e)}"
@@ -160,6 +182,41 @@ async def health_check():
         await r.close()
     except Exception as e:
         health_status["services"]["redis"] = f"error: {str(e)}"
+        health_status["status"] = "degraded"
+    
+    # Check Celery Worker (simplified check)
+    try:
+        from app.celery_app import celery_app
+        import asyncio
+        
+        # Quick check with timeout to avoid blocking
+        loop = asyncio.get_event_loop()
+        
+        def check_workers():
+            try:
+                inspect = celery_app.control.inspect(timeout=0.5)
+                stats = inspect.stats()
+                if stats:
+                    return f"healthy ({len(stats)} workers)"
+                else:
+                    return "no workers running"
+            except:
+                return "no workers running"
+        
+        # Run with timeout
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, check_workers),
+                timeout=1.0
+            )
+            health_status["services"]["celery"] = result
+            if result == "no workers running":
+                health_status["status"] = "degraded"
+        except asyncio.TimeoutError:
+            health_status["services"]["celery"] = "no workers running"
+            health_status["status"] = "degraded"
+    except Exception as e:
+        health_status["services"]["celery"] = "no workers running"
         health_status["status"] = "degraded"
     
     return health_status

@@ -43,8 +43,10 @@ class HybridSearchRequest(BaseModel):
     query: str = Field(..., description="Search query text")
     use_vector: bool = Field(default=True, description="Include vector search")
     use_graph: bool = Field(default=True, description="Include graph search")
+    use_bm25: bool = Field(default=True, description="Include BM25 (lexical) search")
     vector_weight: float = Field(default=0.7, ge=0, le=1, description="Weight for vector scores")
     limit: int = Field(default=10, ge=1, le=100, description="Maximum results")
+    rerank: bool = Field(default=True, description="Apply reranking to fused results")
 
 
 class SearchResponse(BaseModel):
@@ -171,8 +173,10 @@ async def hybrid_search(
             query=request.query,
             use_vector=request.use_vector,
             use_graph=request.use_graph,
+            use_bm25=request.use_bm25,
             vector_weight=request.vector_weight,
-            limit=request.limit
+            limit=request.limit,
+            rerank=request.rerank
         )
         
         # Convert results to dict format

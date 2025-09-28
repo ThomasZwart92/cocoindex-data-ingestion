@@ -12,6 +12,7 @@ from app.services.document_processor import DocumentProcessor
 from app.services.database import get_db_session, DocumentChunkTable as DocumentChunk, DocumentTable as Document
 from app.services.supabase_client_db import document_service, chunk_service
 from app.config import settings
+from app.api.schemas import BatchUpdateChunksRequest, BatchUpdateChunksResponse, ErrorResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chunks", tags=["chunks"])
@@ -80,13 +81,19 @@ async def delete_chunk_supabase(chunk_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/batch")
-async def batch_update_chunks(request: dict):
+@router.put(
+    "/batch",
+    response_model=BatchUpdateChunksResponse,
+    summary="Batch update chunks",
+    description="Update multiple chunks' text content in a single request.",
+    responses={500: {"model": ErrorResponse}},
+)
+async def batch_update_chunks(request: BatchUpdateChunksRequest):
     """
     Batch update multiple chunks
     """
     try:
-        updates = request.get("updates", [])
+        updates = request.updates or []
         if not updates:
             raise HTTPException(status_code=400, detail="Updates array is required")
         
@@ -98,11 +105,11 @@ async def batch_update_chunks(request: dict):
                 if chunk_service.update_chunk(chunk_id, text):
                     updated_count += 1
         
-        return {
-            "message": f"Batch update completed",
-            "updated_count": updated_count,
-            "total_requested": len(updates)
-        }
+        return BatchUpdateChunksResponse(
+            message="Batch update completed",
+            updated_count=updated_count,
+            total_requested=len(updates),
+        )
     except Exception as e:
         logger.error(f"Error in batch update: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -162,7 +169,7 @@ async def get_chunk(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/{chunk_id}")
+@router.put("/{chunk_id}", include_in_schema=False)
 async def update_chunk(
     chunk_id: UUID,
     text: str,
@@ -230,7 +237,7 @@ async def update_chunk(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/{chunk_id}")
+@router.delete("/{chunk_id}", include_in_schema=False)
 async def delete_chunk(
     chunk_id: UUID,
     renumber: bool = Query(True, description="Renumber remaining chunks"),

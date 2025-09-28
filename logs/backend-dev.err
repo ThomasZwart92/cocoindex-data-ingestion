@@ -1,0 +1,487 @@
+INFO:     Will watch for changes in these directories: ['C:\\Users\\tzwar\\Documents\\Dev\\cocoindex']
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     Started reloader process [41232] using WatchFiles
+C:\Users\tzwar\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pydantic\_internal\_config.py:373: UserWarning: Valid config keys have changed in V2:
+* 'schema_extra' has been renamed to 'json_schema_extra'
+  warnings.warn(message, UserWarning)
+C:\Users\tzwar\Documents\Dev\cocoindex\app\services\qdrant_service.py:69: UserWarning: Api key is used with an insecure connection.
+  self.client = QdrantClient(url=self.url, api_key=self.api_key)
+C:\Users\tzwar\Documents\Dev\cocoindex\app\services\qdrant_service.py:70: UserWarning: Api key is used with an insecure connection.
+  self.async_client = AsyncQdrantClient(url=self.url, api_key=self.api_key)
+INFO:     Started server process [14436]
+INFO:     Waiting for application startup.
+2025-09-20 15:59:23,598 - app.main - INFO - Starting up application...
+2025-09-20 15:59:23,598 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 15:59:23,696 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 15:59:23,713 - app.services.neo4j_service - INFO - Created constraint/index: entity_id
+2025-09-20 15:59:23,718 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT entity_id FOR (e:Entity) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE'
+2025-09-20 15:59:23,732 - app.services.neo4j_service - INFO - Created constraint/index: document_id
+2025-09-20 15:59:23,736 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT document_id IF NOT EXISTS FOR (e:Document) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT document_id FOR (e:Document) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.id IS UNIQUE'
+2025-09-20 15:59:23,751 - app.services.neo4j_service - INFO - Created constraint/index: entity_name
+2025-09-20 15:59:23,757 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE RANGE INDEX entity_name IF NOT EXISTS FOR (e:Entity) ON (e.name)` has no effect.} {description: `RANGE INDEX entity_name FOR (e:Entity) ON (e.name)` already exists.} {position: None} for query: 'CREATE INDEX entity_name IF NOT EXISTS FOR (e:Entity) ON (e.name)'
+2025-09-20 15:59:23,770 - app.services.neo4j_service - INFO - Created constraint/index: entity_type
+2025-09-20 15:59:23,775 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE RANGE INDEX entity_type IF NOT EXISTS FOR (e:Entity) ON (e.type)` has no effect.} {description: `RANGE INDEX entity_type FOR (e:Entity) ON (e.type)` already exists.} {position: None} for query: 'CREATE INDEX entity_type IF NOT EXISTS FOR (e:Entity) ON (e.type)'
+2025-09-20 15:59:23,787 - app.services.neo4j_service - INFO - Created constraint/index: entity_name_type
+2025-09-20 15:59:23,791 - neo4j.notifications - INFO - Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE RANGE INDEX entity_name_type IF NOT EXISTS FOR (e:Entity) ON (e.name, e.type)` has no effect.} {description: `RANGE INDEX entity_name_type FOR (e:Entity) ON (e.name, e.type)` already exists.} {position: None} for query: 'CREATE INDEX entity_name_type IF NOT EXISTS FOR (e:Entity) ON (e.name, e.type)'
+2025-09-20 15:59:24,894 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 15:59:25,922 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 15:59:25,924 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 15:59:25,925 - app.main - INFO - Application startup complete
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app\api\documents.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2025-09-20 17:02:12,597 - app.main - INFO - Shutting down application...
+2025-09-20 17:02:12,598 - app.services.neo4j_service - INFO - Closed Neo4j connection
+2025-09-20 17:02:12,598 - app.main - INFO - Application shutdown complete
+INFO:     Application shutdown complete.
+INFO:     Finished server process [14436]
+09af "HTTP/2 200 OK"
+2025-09-20 16:35:37,304 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.143fc9c0-8b0c-4655-9f1e-8cf5f85309af&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:35:37,374 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.9413cb3c-d3ae-4e48-8fc8-8789298459df "HTTP/2 200 OK"
+2025-09-20 16:35:37,415 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.9413cb3c-d3ae-4e48-8fc8-8789298459df&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:35:37,489 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518 "HTTP/2 200 OK"
+2025-09-20 16:35:37,553 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:35:37,614 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.44f69551-1321-494e-ac60-d3f4aed9c480 "HTTP/2 200 OK"
+2025-09-20 16:35:37,681 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.44f69551-1321-494e-ac60-d3f4aed9c480&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:35:37,721 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.85d50197-57ad-4409-8117-2a7346d5704c "HTTP/2 200 OK"
+2025-09-20 16:35:37,766 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.85d50197-57ad-4409-8117-2a7346d5704c&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:35:37,768 - app.api.documents - INFO - Listed 5 documents with filters: status=None, source=None
+2025-09-20 16:35:37,774 - app.main - WARNING - Slow request: GET /api/documents/ took 1739.76ms
+2025-09-20 16:35:37,856 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:35:37,865 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:35:38,922 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:35:39,927 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:35:39,927 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:35:39,944 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:35:43,636 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/documents?select=%2A&id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518 "HTTP/2 200 OK"
+2025-09-20 16:35:43,713 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=%2A&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518&order=chunk_index.asc "HTTP/2 200 OK"
+2025-09-20 16:35:43,793 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=%2A&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518 "HTTP/2 200 OK"
+2025-09-20 16:35:43,855 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/canonical_entities?select=id%2Cname%2Ctype&id=in.%281c784e22-9a0e-493f-a491-3b1ca04b3554%2C4734e48d-e434-4300-9659-925d2be17b81%2C58a766be-d9e4-405c-b1b6-56bb121d88a6%2C6598ba42-5d33-4072-b500-59235e35301b%2C6b694ae0-1500-4d34-9ebd-061c64cd2a90%2C77a633a4-df4e-4e23-87c2-b17340efa19b%2C86961786-4bde-403d-9dc6-d3099acb06fd%2C8c0445ec-49b9-4395-99a7-9e29ba4683f2%2C8f312aad-957a-4ca5-8378-6f07d4ee222e%2C9dcaeef1-f287-4fd3-a03c-be9b8634349a%2Ccaf83375-27fc-4d15-afa8-886fb6221fb2%2Ccb71a331-fe89-4065-8785-6b0d25b13297%2Cd1d7b162-b579-464b-98c1-dc5f00e1f16b%2Cf9f77ccb-d890-4c12-9c25-944dd55feaa1%29 "HTTP/2 200 OK"
+2025-09-20 16:35:43,859 - app.api.documents - INFO - Retrieved document 3c827922-b2c0-469b-bfe7-0ae7493ae518
+2025-09-20 16:35:43,864 - app.main - WARNING - Slow request: GET /api/documents/3c827922-b2c0-469b-bfe7-0ae7493ae518 took 349.85ms
+2025-09-20 16:35:43,877 - app.main - WARNING - Slow request: GET /health took 7846.27ms
+2025-09-20 16:35:43,962 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=%2A&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518&order=chunk_index.asc "HTTP/2 200 OK"
+2025-09-20 16:35:44,004 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=%2A&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518 "HTTP/2 200 OK"
+2025-09-20 16:35:44,058 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/canonical_entities?select=id%2Cname%2Ctype&id=in.%281c784e22-9a0e-493f-a491-3b1ca04b3554%2C4734e48d-e434-4300-9659-925d2be17b81%2C58a766be-d9e4-405c-b1b6-56bb121d88a6%2C6598ba42-5d33-4072-b500-59235e35301b%2C6b694ae0-1500-4d34-9ebd-061c64cd2a90%2C77a633a4-df4e-4e23-87c2-b17340efa19b%2C86961786-4bde-403d-9dc6-d3099acb06fd%2C8c0445ec-49b9-4395-99a7-9e29ba4683f2%2C8f312aad-957a-4ca5-8378-6f07d4ee222e%2C9dcaeef1-f287-4fd3-a03c-be9b8634349a%2Ccaf83375-27fc-4d15-afa8-886fb6221fb2%2Ccb71a331-fe89-4065-8785-6b0d25b13297%2Cd1d7b162-b579-464b-98c1-dc5f00e1f16b%2Cf9f77ccb-d890-4c12-9c25-944dd55feaa1%29 "HTTP/2 200 OK"
+2025-09-20 16:35:44,917 - app.api.bridge - INFO - Fetching relationships for document 3c827922-b2c0-469b-bfe7-0ae7493ae518 from Supabase
+2025-09-20 16:35:44,989 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:35:45,081 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/canonical_relationships?select=%2A&source_entity_id=in.%289dcaeef1-f287-4fd3-a03c-be9b8634349a%2C8c0445ec-49b9-4395-99a7-9e29ba4683f2%2Cd1d7b162-b579-464b-98c1-dc5f00e1f16b%2Cf9f77ccb-d890-4c12-9c25-944dd55feaa1%2Ccaf83375-27fc-4d15-afa8-886fb6221fb2%2C58a766be-d9e4-405c-b1b6-56bb121d88a6%2C1c784e22-9a0e-493f-a491-3b1ca04b3554%2Ccb71a331-fe89-4065-8785-6b0d25b13297%2C86961786-4bde-403d-9dc6-d3099acb06fd%2C6598ba42-5d33-4072-b500-59235e35301b%2C77a633a4-df4e-4e23-87c2-b17340efa19b%2C6b694ae0-1500-4d34-9ebd-061c64cd2a90%2C8f312aad-957a-4ca5-8378-6f07d4ee222e%2C4734e48d-e434-4300-9659-925d2be17b81%29 "HTTP/2 200 OK"
+2025-09-20 16:35:45,196 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/canonical_relationships?select=%2A&target_entity_id=in.%289dcaeef1-f287-4fd3-a03c-be9b8634349a%2C8c0445ec-49b9-4395-99a7-9e29ba4683f2%2Cd1d7b162-b579-464b-98c1-dc5f00e1f16b%2Cf9f77ccb-d890-4c12-9c25-944dd55feaa1%2Ccaf83375-27fc-4d15-afa8-886fb6221fb2%2C58a766be-d9e4-405c-b1b6-56bb121d88a6%2C1c784e22-9a0e-493f-a491-3b1ca04b3554%2Ccb71a331-fe89-4065-8785-6b0d25b13297%2C86961786-4bde-403d-9dc6-d3099acb06fd%2C6598ba42-5d33-4072-b500-59235e35301b%2C77a633a4-df4e-4e23-87c2-b17340efa19b%2C6b694ae0-1500-4d34-9ebd-061c64cd2a90%2C8f312aad-957a-4ca5-8378-6f07d4ee222e%2C4734e48d-e434-4300-9659-925d2be17b81%29 "HTTP/2 200 OK"
+2025-09-20 16:35:45,200 - app.api.bridge - INFO - Retrieved 11 canonical relationships for document 3c827922-b2c0-469b-bfe7-0ae7493ae518
+2025-09-20 16:35:45,202 - app.main - WARNING - Slow request: GET /api/documents/3c827922-b2c0-469b-bfe7-0ae7493ae518/relationships took 284.85ms
+2025-09-20 16:36:45,041 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:36:45,182 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/documents?select=%2A&limit=100&order=created_at.desc "HTTP/2 200 OK"
+2025-09-20 16:36:45,273 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.143fc9c0-8b0c-4655-9f1e-8cf5f85309af "HTTP/2 200 OK"
+2025-09-20 16:36:45,370 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.143fc9c0-8b0c-4655-9f1e-8cf5f85309af&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:36:45,440 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.9413cb3c-d3ae-4e48-8fc8-8789298459df "HTTP/2 200 OK"
+2025-09-20 16:36:45,492 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.9413cb3c-d3ae-4e48-8fc8-8789298459df&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:36:45,573 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518 "HTTP/2 200 OK"
+2025-09-20 16:36:45,649 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:36:45,698 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.44f69551-1321-494e-ac60-d3f4aed9c480 "HTTP/2 200 OK"
+2025-09-20 16:36:45,769 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.44f69551-1321-494e-ac60-d3f4aed9c480&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:36:45,823 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.85d50197-57ad-4409-8117-2a7346d5704c "HTTP/2 200 OK"
+2025-09-20 16:36:45,899 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.85d50197-57ad-4409-8117-2a7346d5704c&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:36:45,901 - app.api.documents - INFO - Listed 5 documents with filters: status=None, source=None
+2025-09-20 16:36:45,904 - app.main - WARNING - Slow request: GET /api/documents/ took 861.39ms
+2025-09-20 16:36:45,975 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:36:45,985 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:36:46,735 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:36:47,382 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:36:47,384 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:36:47,390 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:36:47,920 - app.main - WARNING - Slow request: GET /health took 2879.37ms
+2025-09-20 16:37:17,936 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:37:18,010 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:37:18,021 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:37:18,948 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:37:19,835 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:37:19,837 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:37:19,843 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:37:20,371 - app.main - WARNING - Slow request: GET /health took 2435.55ms
+2025-09-20 16:37:50,701 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:37:50,769 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:37:50,791 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:37:51,425 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:37:52,119 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:37:52,121 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:37:52,127 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:37:52,648 - app.main - WARNING - Slow request: GET /health took 1947.09ms
+2025-09-20 16:38:22,657 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:38:22,723 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:38:22,729 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:38:23,413 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:38:24,042 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:38:24,044 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:38:24,052 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:38:24,588 - app.main - WARNING - Slow request: GET /health took 1930.87ms
+2025-09-20 16:38:54,914 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:38:54,984 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:38:54,992 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:38:55,764 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:38:56,459 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:38:56,462 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:38:56,471 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:38:56,999 - app.main - WARNING - Slow request: GET /health took 2085.23ms
+2025-09-20 16:39:27,023 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:39:27,087 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:39:27,097 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:39:27,752 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:39:28,485 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:39:28,487 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:39:28,492 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:39:29,018 - app.main - WARNING - Slow request: GET /health took 1995.33ms
+2025-09-20 16:39:59,343 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:39:59,407 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:39:59,412 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:40:00,121 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:40:00,910 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:40:00,911 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:40:00,917 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:40:01,449 - app.main - WARNING - Slow request: GET /health took 2106.04ms
+2025-09-20 16:40:31,463 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:40:31,523 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:40:31,528 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:40:32,202 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:40:32,907 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:40:32,909 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:40:32,915 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:40:33,435 - app.main - WARNING - Slow request: GET /health took 1972.64ms
+2025-09-20 16:41:03,762 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:41:03,854 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:41:03,862 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:41:04,598 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:41:05,258 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:41:05,260 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:41:05,282 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:41:05,822 - app.main - WARNING - Slow request: GET /health took 2059.83ms
+2025-09-20 16:41:35,833 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:41:35,904 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:41:35,912 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:41:36,568 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:41:37,250 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:41:37,252 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:41:37,258 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:41:37,797 - app.main - WARNING - Slow request: GET /health took 1963.75ms
+2025-09-20 16:42:08,119 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:42:08,186 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:42:08,193 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:42:08,827 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:42:09,504 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:42:09,506 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:42:09,512 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:42:10,057 - app.main - WARNING - Slow request: GET /health took 1937.93ms
+2025-09-20 16:42:40,069 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:42:40,144 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:42:40,155 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:42:40,843 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:42:41,516 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:42:41,518 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:42:41,548 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:42:42,086 - app.main - WARNING - Slow request: GET /health took 2017.35ms
+2025-09-20 16:43:12,415 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:43:12,492 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:43:12,504 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:43:13,160 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:43:13,797 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:43:13,799 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:43:13,804 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:43:14,333 - app.main - WARNING - Slow request: GET /health took 1918.70ms
+2025-09-20 16:43:44,348 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:43:44,417 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:43:44,424 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:43:45,073 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:43:45,807 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:43:45,808 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:43:45,824 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:43:46,355 - app.main - WARNING - Slow request: GET /health took 2007.97ms
+2025-09-20 16:44:16,676 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:44:16,776 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:44:16,791 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:44:17,466 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:44:18,119 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:44:18,120 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:44:18,129 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:44:18,663 - app.main - WARNING - Slow request: GET /health took 1987.30ms
+2025-09-20 16:44:48,676 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:44:48,758 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:44:48,771 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:44:49,460 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:44:50,237 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:44:50,249 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:44:50,257 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:44:50,786 - app.main - WARNING - Slow request: GET /health took 2110.05ms
+2025-09-20 16:45:21,102 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:45:21,176 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:45:21,184 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:45:21,902 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:45:22,540 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:45:22,542 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:45:22,547 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:45:23,075 - app.main - WARNING - Slow request: GET /health took 1973.19ms
+2025-09-20 16:45:53,096 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:45:53,174 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:45:53,188 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:45:53,885 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:45:54,613 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:45:54,615 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:45:54,629 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:45:55,153 - app.main - WARNING - Slow request: GET /health took 2057.00ms
+2025-09-20 16:46:25,474 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:46:25,552 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:46:25,563 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:46:26,223 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:46:26,890 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:46:26,891 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:46:26,922 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:46:27,448 - app.main - WARNING - Slow request: GET /health took 1974.69ms
+2025-09-20 16:46:57,468 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:46:57,538 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:46:57,547 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:46:58,425 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:46:59,365 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:46:59,368 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:46:59,382 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:46:59,931 - app.main - WARNING - Slow request: GET /health took 2463.97ms
+2025-09-20 16:47:30,255 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:47:30,323 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:47:30,332 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:47:31,300 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:47:32,162 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:47:32,164 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:47:32,169 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:47:32,715 - app.main - WARNING - Slow request: GET /health took 2460.44ms
+2025-09-20 16:48:02,731 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:48:02,809 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:48:02,827 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:48:03,808 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:48:04,573 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:48:04,575 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:48:04,600 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:48:05,149 - app.main - WARNING - Slow request: GET /health took 2418.12ms
+2025-09-20 16:48:35,478 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:48:35,554 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:48:35,563 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:48:36,486 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:48:37,493 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:48:37,496 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:48:37,504 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:48:38,034 - app.main - WARNING - Slow request: GET /health took 2556.26ms
+2025-09-20 16:49:08,044 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:49:08,120 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:49:08,133 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:49:09,101 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:49:10,126 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:49:10,128 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:49:10,140 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:49:10,671 - app.main - WARNING - Slow request: GET /health took 2626.49ms
+2025-09-20 16:49:40,999 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:49:41,092 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:49:41,105 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:49:41,995 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:49:42,813 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:49:42,815 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:49:42,845 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:49:43,374 - app.main - WARNING - Slow request: GET /health took 2376.37ms
+2025-09-20 16:50:13,383 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:50:13,475 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:50:13,491 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:50:14,450 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:50:15,320 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:50:15,322 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:50:15,329 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:50:15,887 - app.main - WARNING - Slow request: GET /health took 2503.68ms
+2025-09-20 16:50:46,212 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:50:46,288 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:50:46,298 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:50:47,284 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:50:48,625 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:50:48,627 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:50:48,641 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:50:49,188 - app.main - WARNING - Slow request: GET /health took 2975.88ms
+2025-09-20 16:51:19,201 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:51:19,272 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:51:19,284 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:51:20,347 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:51:21,045 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:51:21,048 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:51:21,060 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:51:21,612 - app.main - WARNING - Slow request: GET /health took 2411.81ms
+2025-09-20 16:51:51,930 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:51:52,012 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:51:52,026 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:51:52,961 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:51:53,743 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:51:53,745 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:51:53,752 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:51:54,295 - app.main - WARNING - Slow request: GET /health took 2365.25ms
+2025-09-20 16:52:24,319 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:52:24,389 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:52:24,398 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:52:25,189 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:52:25,924 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:52:25,926 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:52:25,946 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:52:26,498 - app.main - WARNING - Slow request: GET /health took 2178.86ms
+2025-09-20 16:52:56,832 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:52:56,906 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:52:56,915 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:52:57,811 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:52:58,746 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:52:58,749 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:52:58,763 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:52:59,313 - app.main - WARNING - Slow request: GET /health took 2481.38ms
+2025-09-20 16:53:29,326 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:53:29,403 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:53:29,411 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:53:30,391 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:53:31,184 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:53:31,186 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:53:31,193 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:53:31,721 - app.main - WARNING - Slow request: GET /health took 2395.10ms
+2025-09-20 16:54:02,046 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:54:02,119 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:54:02,129 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:54:03,002 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:54:03,721 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:54:03,724 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:54:03,735 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:54:04,267 - app.main - WARNING - Slow request: GET /health took 2221.20ms
+2025-09-20 16:54:34,278 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:54:34,358 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:54:34,366 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:54:35,227 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:54:36,173 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:54:36,175 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:54:36,195 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:54:36,759 - app.main - WARNING - Slow request: GET /health took 2481.31ms
+2025-09-20 16:55:07,091 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:55:07,167 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:55:07,175 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:55:08,197 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:55:09,182 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:55:09,184 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:55:09,189 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:55:09,715 - app.main - WARNING - Slow request: GET /health took 2624.28ms
+2025-09-20 16:55:39,728 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:55:39,800 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:55:39,807 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:55:40,464 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:55:41,164 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:55:41,165 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:55:41,170 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:55:41,722 - app.main - WARNING - Slow request: GET /health took 1993.42ms
+2025-09-20 16:56:12,044 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:56:12,109 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:56:12,117 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:56:12,788 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:56:13,465 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:56:13,467 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:56:13,472 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:56:14,485 - app.main - WARNING - Slow request: GET /health took 2441.73ms
+2025-09-20 16:56:18,495 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:56:18,666 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/documents?select=%2A&limit=100&order=created_at.desc "HTTP/2 200 OK"
+2025-09-20 16:56:18,739 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.143fc9c0-8b0c-4655-9f1e-8cf5f85309af "HTTP/2 200 OK"
+2025-09-20 16:56:18,808 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.143fc9c0-8b0c-4655-9f1e-8cf5f85309af&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:56:18,871 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.9413cb3c-d3ae-4e48-8fc8-8789298459df "HTTP/2 200 OK"
+2025-09-20 16:56:18,937 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.9413cb3c-d3ae-4e48-8fc8-8789298459df&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:56:18,982 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518 "HTTP/2 200 OK"
+2025-09-20 16:56:19,026 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:56:19,068 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.44f69551-1321-494e-ac60-d3f4aed9c480 "HTTP/2 200 OK"
+2025-09-20 16:56:19,109 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.44f69551-1321-494e-ac60-d3f4aed9c480&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:56:19,166 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.85d50197-57ad-4409-8117-2a7346d5704c "HTTP/2 200 OK"
+2025-09-20 16:56:19,215 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.85d50197-57ad-4409-8117-2a7346d5704c&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 16:56:19,215 - app.api.documents - INFO - Listed 5 documents with filters: status=None, source=None
+2025-09-20 16:56:19,217 - app.main - WARNING - Slow request: GET /api/documents/ took 720.61ms
+2025-09-20 16:56:19,271 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:56:19,275 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:56:19,950 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:56:20,659 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:56:20,661 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:56:20,694 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:56:21,237 - app.main - WARNING - Slow request: GET /health took 2742.92ms
+2025-09-20 16:56:51,259 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:56:51,339 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:56:51,344 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:56:52,461 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:56:53,422 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:56:53,424 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:56:53,434 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:56:53,970 - app.main - WARNING - Slow request: GET /health took 2710.67ms
+2025-09-20 16:57:23,981 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:57:24,046 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:57:24,061 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:57:24,683 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:57:25,381 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:57:25,382 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:57:25,389 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:57:25,922 - app.main - WARNING - Slow request: GET /health took 1940.73ms
+2025-09-20 16:57:56,241 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:57:56,312 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:57:56,317 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:57:56,976 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:57:57,754 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:57:57,755 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:57:57,761 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:57:58,291 - app.main - WARNING - Slow request: GET /health took 2050.53ms
+2025-09-20 16:58:28,308 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 16:58:28,370 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 16:58:28,375 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 16:58:29,045 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:58:29,705 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 16:58:29,707 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 16:58:29,714 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 16:58:30,238 - app.main - WARNING - Slow request: GET /health took 1931.09ms
+WARNING:  WatchFiles detected changes in 'app\api\documents.py'. Reloading...
+2025-09-20 17:00:11,761 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 17:00:11,947 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/documents?select=%2A&limit=100&order=created_at.desc "HTTP/2 200 OK"
+2025-09-20 17:00:12,036 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.143fc9c0-8b0c-4655-9f1e-8cf5f85309af "HTTP/2 200 OK"
+2025-09-20 17:00:12,106 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.143fc9c0-8b0c-4655-9f1e-8cf5f85309af&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 17:00:12,174 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.9413cb3c-d3ae-4e48-8fc8-8789298459df "HTTP/2 200 OK"
+2025-09-20 17:00:12,254 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.9413cb3c-d3ae-4e48-8fc8-8789298459df&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 17:00:12,323 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518 "HTTP/2 200 OK"
+2025-09-20 17:00:12,394 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.3c827922-b2c0-469b-bfe7-0ae7493ae518&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 17:00:12,473 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.44f69551-1321-494e-ac60-d3f4aed9c480 "HTTP/2 200 OK"
+2025-09-20 17:00:12,521 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.44f69551-1321-494e-ac60-d3f4aed9c480&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 17:00:12,559 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/chunks?select=id&document_id=eq.85d50197-57ad-4409-8117-2a7346d5704c "HTTP/2 200 OK"
+2025-09-20 17:00:12,609 - httpx - INFO - HTTP Request: GET https://ycddtddyffnqqehmjsid.supabase.co/rest/v1/entity_mentions?select=canonical_entity_id&document_id=eq.85d50197-57ad-4409-8117-2a7346d5704c&canonical_entity_id=not.is.null "HTTP/2 200 OK"
+2025-09-20 17:00:12,610 - app.api.documents - INFO - Listed 5 documents with filters: status=None, source=None
+2025-09-20 17:00:12,611 - app.main - WARNING - Slow request: GET /api/documents/ took 848.39ms
+2025-09-20 17:00:12,676 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 17:00:12,688 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 17:00:13,759 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 17:00:15,100 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 17:00:15,102 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 17:00:15,116 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 17:00:15,657 - app.main - WARNING - Slow request: GET /health took 3897.16ms
+2025-09-20 17:00:45,677 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 17:00:45,745 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 17:00:45,749 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 17:00:46,371 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 17:00:47,060 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 17:00:47,061 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 17:00:47,067 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 17:00:47,592 - app.main - WARNING - Slow request: GET /health took 1915.01ms
+2025-09-20 17:01:17,910 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 17:01:18,009 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 17:01:18,016 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 17:01:18,693 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 17:01:19,391 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 17:01:19,391 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 17:01:19,396 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 17:01:19,924 - app.main - WARNING - Slow request: GET /health took 2015.09ms
+2025-09-20 17:01:50,256 - app.services.neo4j_service - INFO - Initialized Neo4jService with URI: bolt://localhost:7687
+2025-09-20 17:01:50,328 - app.services.neo4j_service - INFO - Successfully connected to Neo4j
+2025-09-20 17:01:50,333 - app.services.neo4j_service - INFO - Neo4j is healthy
+2025-09-20 17:01:51,003 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 17:01:51,658 - httpx - INFO - HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+2025-09-20 17:01:51,659 - app.services.qdrant_service - INFO - Initialized QdrantService with URL: http://localhost:6333
+2025-09-20 17:01:51,664 - httpx - INFO - HTTP Request: GET http://localhost:6333/collections "HTTP/1.1 200 OK"
+2025-09-20 17:01:52,181 - app.main - WARNING - Slow request: GET /health took 1925.58ms
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2025-09-20 17:02:12,660 - app.main - INFO - Shutting down application...
+2025-09-20 17:02:12,661 - app.services.neo4j_service - INFO - Closed Neo4j connection
+2025-09-20 17:02:12,662 - app.main - INFO - Application shutdown complete
+INFO:     Application shutdown complete.
+INFO:     Finished server process [39256]

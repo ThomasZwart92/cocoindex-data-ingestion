@@ -122,8 +122,9 @@ async def get_document_chunks(document_id: str, limit: int = Query(100, ge=1, le
         # Return empty list instead of error to allow graceful degradation
         return []
 
-@router.get("/documents/{document_id}/entities")
-async def get_document_entities(document_id: str) -> List[Dict[str, Any]]:
+# Changed route to avoid conflict with entities.py handler
+@router.get("/documents/{document_id}/entities-neo4j")
+async def get_document_entities_neo4j(document_id: str) -> List[Dict[str, Any]]:
     """
     Fetch entities from Neo4j for a specific document.
     
@@ -208,42 +209,37 @@ async def get_document_relationships(document_id: str) -> List[Dict[str, Any]]:
     try:
         logger.info(f"Fetching relationships for document {document_id} from Supabase")
         
-        # First get all entities for this document
-        entities_response = supabase_service.client.table("entities").select("id").eq("document_id", document_id).execute()
-        
-        if not entities_response.data:
-            logger.info(f"No entities found for document {document_id}")
+        # Find canonical ids present in this document via mentions
+        client = supabase_service.client
+        mentions = client.table("entity_mentions").select("canonical_entity_id").eq("document_id", document_id).not_.is_("canonical_entity_id", "null").execute()
+        ids = [m.get("canonical_entity_id") for m in (mentions.data or []) if m.get("canonical_entity_id")]
+        if not ids:
+            logger.info(f"No canonical entities found for document {document_id}")
             return []
-        
-        entity_ids = [e['id'] for e in entities_response.data]
-        
-        # Fetch relationships where either source or target is one of these entities
-        # Note: Supabase doesn't support OR in filters easily, so we'll fetch both and combine
-        source_relationships = supabase_service.client.table("entity_relationships").select("*").in_("source_entity_id", entity_ids).execute()
-        target_relationships = supabase_service.client.table("entity_relationships").select("*").in_("target_entity_id", entity_ids).execute()
-        
-        # Combine and deduplicate
-        all_relationships = []
+        ids = list(set(ids))
+
+        # Fetch canonical relationships where either end is present in this doc
+        src_rels = client.table("canonical_relationships").select("*").in_("source_entity_id", ids).execute()
+        tgt_rels = client.table("canonical_relationships").select("*").in_("target_entity_id", ids).execute()
+
+        # Combine, deduplicate, map confidence field
+        all_relationships: list[Dict[str, Any]] = []
         seen_ids = set()
-        
-        for rel in source_relationships.data + target_relationships.data:
-            if rel['id'] not in seen_ids:
-                seen_ids.add(rel['id'])
-                # Map confidence_score to confidence for frontend compatibility
-                rel_copy = rel.copy()
-                if 'confidence_score' in rel_copy:
-                    rel_copy['confidence'] = rel_copy['confidence_score'] or 0.5
-                else:
-                    rel_copy['confidence'] = 0.5
-                all_relationships.append(rel_copy)
-        
+        for rel in (src_rels.data or []) + (tgt_rels.data or []):
+            rid = rel.get('id')
+            if rid in seen_ids:
+                continue
+            seen_ids.add(rid)
+            rel_copy = rel.copy()
+            rel_copy['confidence'] = float(rel_copy.get('confidence_score') or 0.0)
+            all_relationships.append(rel_copy)
+
         if all_relationships:
-            # Sort relationships by created_at to maintain consistent order
             all_relationships.sort(key=lambda x: x.get('created_at', ''))
-            logger.info(f"Retrieved {len(all_relationships)} relationships for document {document_id}")
+            logger.info(f"Retrieved {len(all_relationships)} canonical relationships for document {document_id}")
             return all_relationships
         else:
-            logger.info(f"No relationships found for document {document_id}")
+            logger.info(f"No canonical relationships found for document {document_id}")
             return []
         
     except Exception as e:
@@ -467,3 +463,4 @@ async def search_hybrid(
     except Exception as e:
         logger.error(f"Error during hybrid search: {e}")
         raise HTTPException(status_code=500, detail=f"Hybrid search failed: {str(e)}")
+

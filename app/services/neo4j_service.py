@@ -275,7 +275,7 @@ class Neo4jService:
                 "source_id": rel.source_id,
                 "target_id": rel.target_id,
                 "type": rel.type,
-                "confidence": rel.confidence,
+                "confidence": getattr(rel, 'confidence_score', 0.5),
                 "properties": clean_props
             })
         
@@ -583,6 +583,102 @@ class Neo4jService:
                 logger.error(f"Failed to delete document graph: {e}")
                 return False
     
+    async def store_document_graph(self, document_id: str) -> Dict[str, int]:
+        """
+        Store approved entities and relationships from document in Neo4j
+
+        Args:
+            document_id: Document ID
+
+        Returns:
+            Dict with counts of stored entities and relationships
+        """
+        await self.connect()
+
+        # Import SupabaseService to get approved entities
+        from app.services.supabase_service import SupabaseService
+        supabase = SupabaseService()
+
+        # Get approved canonical entities for this document
+        canonical_entities = supabase.get_canonical_entities_for_document(document_id)
+
+        # Get approved relationships for this document
+        canonical_relationships = supabase.get_canonical_relationships_for_document(document_id)
+
+        entities_created = 0
+        relationships_created = 0
+
+        async with self.driver.session() as session:
+            try:
+                # Create or update entities
+                for entity in canonical_entities:
+                    # Create/merge entity node
+                    entity_query = """
+                    MERGE (e:Entity {id: $entity_id})
+                    SET e.name = $name,
+                        e.canonical_name = $canonical_name,
+                        e.type = $type,
+                        e.description = $description,
+                        e.updated_at = datetime()
+                    WITH e
+                    MERGE (d:Document {id: $document_id})
+                    MERGE (d)-[:CONTAINS_ENTITY]->(e)
+                    RETURN e
+                    """
+
+                    result = await session.run(
+                        entity_query,
+                        entity_id=entity.get('id'),
+                        name=entity.get('name'),
+                        canonical_name=entity.get('canonical_name', entity.get('name')),
+                        type=entity.get('type', 'concept'),
+                        description=entity.get('description', ''),
+                        document_id=document_id
+                    )
+
+                    if await result.single():
+                        entities_created += 1
+
+                # Create relationships between entities
+                for rel in canonical_relationships:
+                    rel_query = """
+                    MATCH (e1:Entity {id: $source_id})
+                    MATCH (e2:Entity {id: $target_id})
+                    MERGE (e1)-[r:RELATES_TO {
+                        type: $rel_type,
+                        confidence: $confidence,
+                        document_id: $document_id
+                    }]->(e2)
+                    SET r.updated_at = datetime()
+                    RETURN r
+                    """
+
+                    result = await session.run(
+                        rel_query,
+                        source_id=rel.get('source_entity_id'),
+                        target_id=rel.get('target_entity_id'),
+                        rel_type=rel.get('relationship_type', 'RELATES_TO'),
+                        confidence=rel.get('confidence_score', 0.5),
+                        document_id=document_id
+                    )
+
+                    if await result.single():
+                        relationships_created += 1
+
+                logger.info(
+                    f"Stored graph for document {document_id}: "
+                    f"{entities_created} entities, {relationships_created} relationships"
+                )
+
+                return {
+                    "entities_created": entities_created,
+                    "relationships_created": relationships_created
+                }
+
+            except Exception as e:
+                logger.error(f"Failed to store document graph: {e}")
+                raise
+
     async def get_statistics(self) -> Dict[str, Any]:
         """Get graph statistics"""
         await self.connect()

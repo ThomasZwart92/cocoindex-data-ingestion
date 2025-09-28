@@ -2,6 +2,12 @@
 import logging
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+from llama_index.core.bridge import pydantic as _li_pydantic
+
+# Expose legacy validator alias for llama_parse compatibility
+if not hasattr(_li_pydantic, 'validator'):
+    _li_pydantic.validator = _li_pydantic.field_validator
+
 from llama_parse import LlamaParse
 from app.config import settings
 from app.models.document import ParseTier
@@ -126,15 +132,24 @@ class DocumentParser:
                 validated_path = PathValidator.validate_path(document_path, allow_urls=True)
                 
                 if validated_path.startswith("http"):
-                    # URL document
-                    documents = parser.load_data(validated_path)
+                    # URL document: download first, then upload via Llama Cloud
+                    import httpx, tempfile
+                    with httpx.Client(timeout=120.0) as client:
+                        resp = client.get(validated_path)
+                        resp.raise_for_status()
+                        # Write to a temporary PDF file
+                        suffix = ".pdf" if validated_path.lower().endswith(".pdf") else ".bin"
+                        with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+                            tmp.write(resp.content)
+                            tmp.flush()
+                            documents = parser.load_data(tmp.name)
                 else:
                     # Local file
                     file_path = Path(validated_path)
                     if not file_path.exists():
-                        # For testing, create a dummy file
-                        logger.warning(f"File not found: {validated_path}, using test content")
-                        return self._get_test_content(document_name)
+                        # Do not fall back to test content; surface a clear error instead
+                        logger.error(f"File not found: {validated_path}")
+                        raise FileNotFoundError(f"File not found: {validated_path}")
                     
                     documents = parser.load_data(str(file_path))
             except PathSecurityError as e:
@@ -167,10 +182,8 @@ class DocumentParser:
             }
             
         except Exception as e:
-            logger.error(f"Failed to parse document: {str(e)}")
-            # Return test content for development
-            if settings.debug:
-                return self._get_test_content(document_name)
+            logger.error(f"Failed to parse document '{document_name}': {str(e)}")
+            # Do not return placeholder content; propagate error so callers can handle it
             raise
     
     def _get_parser_config(self, parse_tier: ParseTier) -> Dict[str, Any]:

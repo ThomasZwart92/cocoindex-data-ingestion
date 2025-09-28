@@ -8,8 +8,8 @@ import json
 
 from qdrant_client import QdrantClient, AsyncQdrantClient
 from qdrant_client.models import (
-    Distance, VectorParams, PointStruct, 
-    Filter, FieldCondition, MatchValue,
+    Distance, VectorParams, PointStruct,
+    Filter, FieldCondition, MatchValue, MatchAny,
     UpdateStatus,
     CollectionStatus, OptimizersConfigDiff
 )
@@ -38,6 +38,11 @@ class QdrantService:
             "vector_size": 1536,  # text-embedding-3-small
             "distance": Distance.COSINE,
             "description": "Document chunk embeddings for semantic search"
+        },
+        "document_tables": {
+            "vector_size": 1536,
+            "distance": Distance.COSINE,
+            "description": "Table text embeddings for table-aware search"
         },
         "document_images": {
             "vectors": {
@@ -156,7 +161,8 @@ class QdrantService:
         self,
         chunks: List[Dict[str, Any]],
         embeddings: List[List[float]],
-        collection_name: str = "document_chunks"
+        collection_name: str = "document_chunks",
+        vector_name: Optional[str] = None
     ) -> int:
         """
         Upsert document chunks with embeddings
@@ -197,9 +203,12 @@ class QdrantService:
             # Remove None values
             payload = {k: v for k, v in payload.items() if v is not None}
             
+            vec = embedding
+            if vector_name:
+                vec = {vector_name: embedding}
             points.append(PointStruct(
                 id=point_id,
-                vector=embedding,
+                vector=vec,
                 payload=payload
             ))
         
@@ -229,7 +238,8 @@ class QdrantService:
         collection_name: str = "document_chunks",
         limit: int = 10,
         score_threshold: Optional[float] = None,
-        filter_conditions: Optional[Dict[str, Any]] = None
+        filter_conditions: Optional[Dict[str, Any]] = None,
+        vector_name: Optional[str] = None
     ) -> List[SearchResult]:
         """
         Search for similar vectors
@@ -249,18 +259,28 @@ class QdrantService:
         if filter_conditions:
             must_conditions = []
             for field, value in filter_conditions.items():
-                must_conditions.append(
-                    FieldCondition(
-                        key=field,
-                        match=MatchValue(value=value)
+                # Support exact value or list of values (OR)
+                if isinstance(value, (list, tuple, set)):
+                    must_conditions.append(
+                        FieldCondition(
+                            key=field,
+                            match=MatchAny(any=list(value))
+                        )
                     )
-                )
+                else:
+                    must_conditions.append(
+                        FieldCondition(
+                            key=field,
+                            match=MatchValue(value=value)
+                        )
+                    )
             search_filter = Filter(must=must_conditions)
         
         # Perform search
+        qv = (vector_name, query_vector) if vector_name else query_vector
         results = await self.async_client.search(
             collection_name=collection_name,
-            query_vector=query_vector,
+            query_vector=qv,
             limit=limit,
             query_filter=search_filter,
             score_threshold=score_threshold,
@@ -439,6 +459,85 @@ class QdrantService:
             logger.error(f"Qdrant health check failed: {e}")
             return False
     
+    async def store_document_embeddings(
+        self,
+        document_id: str,
+        chunks: List[Any],
+        collection_name: str = "document_chunks"
+    ) -> int:
+        """
+        Store document chunk embeddings in Qdrant
+
+        Args:
+            document_id: Document ID
+            chunks: List of chunk objects with embedding_vector attribute
+            collection_name: Target collection name
+
+        Returns:
+            Number of points stored
+        """
+        try:
+            # Ensure collection exists
+            await self.ensure_collection(collection_name)
+
+            # Prepare points for insertion
+            points = []
+            for chunk in chunks:
+                # Skip chunks without embeddings
+                if not hasattr(chunk, 'embedding_vector') or not chunk.embedding_vector:
+                    logger.warning(f"Chunk {chunk.id} has no embedding_vector, skipping")
+                    continue
+
+                # Create point for Qdrant
+                point = PointStruct(
+                    id=str(uuid4()),  # Generate unique ID for the point
+                    vector=chunk.embedding_vector,
+                    payload={
+                        "chunk_id": chunk.id,
+                        "document_id": document_id,
+                        "chunk_number": chunk.chunk_number if hasattr(chunk, 'chunk_number') else 0,
+                        "chunk_text": chunk.chunk_text if hasattr(chunk, 'chunk_text') else "",
+                        "chunk_size": chunk.chunk_size if hasattr(chunk, 'chunk_size') else len(chunk.chunk_text if hasattr(chunk, 'chunk_text') else ""),
+                        "parent_chunk_id": chunk.parent_chunk_id if hasattr(chunk, 'parent_chunk_id') else None,
+                        "metadata": chunk.metadata if hasattr(chunk, 'metadata') else {},
+                        "embedding_model": chunk.embedding_model if hasattr(chunk, 'embedding_model') else "text-embedding-3-small",
+                        "start_position": chunk.start_position if hasattr(chunk, 'start_position') else 0,
+                        "end_position": chunk.end_position if hasattr(chunk, 'end_position') else 0
+                    }
+                )
+                points.append(point)
+
+            if not points:
+                logger.warning(f"No valid embeddings to store for document {document_id}")
+                return 0
+
+            # Delete existing points for this document first (to avoid duplicates)
+            await self.delete_document_vectors(document_id, collection_name)
+
+            # Batch upload points (Qdrant recommends batches of 100)
+            batch_size = 100
+            total_stored = 0
+
+            for i in range(0, len(points), batch_size):
+                batch = points[i:i + batch_size]
+                result = await self.async_client.upsert(
+                    collection_name=collection_name,
+                    points=batch
+                )
+
+                if result.status == UpdateStatus.COMPLETED:
+                    total_stored += len(batch)
+                    logger.info(f"Stored batch {i//batch_size + 1} ({len(batch)} points) for document {document_id}")
+                else:
+                    logger.error(f"Failed to store batch {i//batch_size + 1} for document {document_id}")
+
+            logger.info(f"Successfully stored {total_stored} embeddings for document {document_id}")
+            return total_stored
+
+        except Exception as e:
+            logger.error(f"Failed to store document embeddings: {e}")
+            raise
+
     async def close(self):
         """Close client connections"""
         await self.async_client.close()

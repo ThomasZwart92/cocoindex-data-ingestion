@@ -1,0 +1,248 @@
+"""Utilities for canonical relationship types."""
+
+from __future__ import annotations
+
+
+
+from typing import Dict
+
+
+
+DEFAULT_RELATIONSHIP_TYPE = "RELATES_TO"
+
+
+
+RELATIONSHIP_TYPES_CANONICAL = {
+
+    "COMPONENT_OF",
+
+    "CONNECTED_TO",
+
+    "DEPENDS_ON",
+
+    "USES",
+
+    "OWNED_BY",
+
+    "RESPONSIBLE_FOR",
+
+    "CAUSES",
+
+    "PREVENTS",
+
+    "IMPACTS",
+
+    "MITIGATES",
+
+    "DEFINES",
+
+    "DESCRIBES",
+
+    "DOCUMENTS",
+
+    "REFERENCES",
+
+    "REPLACES",
+
+    "COMPATIBLE_WITH",
+
+    "CONFLICTS_WITH",
+
+    "MONITORS",
+
+    "MEASURES",
+
+    DEFAULT_RELATIONSHIP_TYPE,
+
+}
+
+
+
+RELATIONSHIP_TYPE_ALIASES: Dict[str, str] = {
+
+    "may cause": "CAUSES",
+
+    "cause": "CAUSES",
+
+    "causes": "CAUSES",
+
+    "helps prevent": "MITIGATES",
+
+    "helps prevent removal": "MITIGATES",
+
+    "helps prevent removal of": "MITIGATES",
+
+    "prevents removal of": "MITIGATES",
+
+    "prevents": "PREVENTS",
+
+    "reduces": "MITIGATES",
+
+    "used to clean": "USES",
+
+    "used for cleaning": "USES",
+
+    "used for": "USES",
+
+    "contains": "COMPONENT_OF",
+
+    "contain": "COMPONENT_OF",
+
+    "contained in": "COMPONENT_OF",
+
+    "located in": "COMPONENT_OF",
+
+    "located_in": "COMPONENT_OF",
+
+    "emits noise from": "CAUSES",
+
+    "emits_noise_from": "CAUSES",
+
+    "noise amplified when": "IMPACTS",
+
+    "noise_amplified_when": "IMPACTS",
+
+    "supports": "RESPONSIBLE_FOR",
+
+    "support": "RESPONSIBLE_FOR",
+
+}
+
+
+
+def canonicalize_relationship_type(value: str | None) -> str:
+
+
+
+    """Canonicalise an arbitrary relationship label into the standard vocabulary."""
+
+
+
+    if not value:
+
+
+
+        return DEFAULT_RELATIONSHIP_TYPE
+
+
+
+
+
+
+
+    trimmed = value.strip()
+
+
+
+    if not trimmed:
+
+
+
+        return DEFAULT_RELATIONSHIP_TYPE
+
+
+
+
+
+
+
+    lower = trimmed.lower()
+
+
+
+    alias = RELATIONSHIP_TYPE_ALIASES.get(lower)
+
+
+
+    if alias:
+
+
+
+        return alias
+
+
+
+
+
+
+
+    sanitized = "".join(ch if ch.isalnum() else "_" for ch in trimmed.upper()).strip("_")
+
+
+
+    if sanitized in RELATIONSHIP_TYPES_CANONICAL:
+
+
+
+        return sanitized
+
+
+
+    # CRITICAL FIX: Always return DEFAULT when not in canonical set
+
+
+
+    return DEFAULT_RELATIONSHIP_TYPE
+
+
+
+
+
+
+
+
+
+
+
+def format_relationship_label(canonical_type: str, raw_value: str | None = None) -> str:
+
+
+
+    """Return a human-friendly label for a relationship type."""
+
+
+
+    if raw_value:
+
+
+
+        trimmed = raw_value.strip()
+
+
+
+        if trimmed:
+
+
+
+            canonical_from_raw = canonicalize_relationship_type(raw_value)
+
+
+
+            if canonical_from_raw == canonical_type:
+
+
+
+                raw_value = None
+
+
+
+            else:
+
+
+
+                return " ".join(word.capitalize() for word in trimmed.split())
+
+
+
+
+
+
+
+    display = canonical_type.replace("_", " ").lower()
+
+
+
+    return " ".join(word.capitalize() for word in display.split())
+
+
+

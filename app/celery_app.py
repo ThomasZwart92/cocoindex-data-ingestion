@@ -1,5 +1,6 @@
 """Celery application configuration"""
 from celery import Celery
+import os
 from app.config import settings
 
 # Create Celery app
@@ -24,3 +25,12 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=1000,
 )
+
+# Prefer thread/solo pool on Windows to avoid prefork issues
+if os.name == "nt":
+    # Use threads by default on Windows; can be overridden via CELERY_CONCURRENCY
+    celery_app.conf.worker_pool = "threads"
+    try:
+        celery_app.conf.worker_concurrency = int(os.getenv("CELERY_CONCURRENCY", "4"))
+    except Exception:
+        celery_app.conf.worker_concurrency = 4

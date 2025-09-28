@@ -105,7 +105,7 @@ export default function DashboardPage() {
             }}>
               <div style={{ fontWeight: '500', textTransform: 'capitalize', color: '#2C3E50' }}>{service}</div>
               <div className={`text-sm mt-1 ${getStatusColor(status.split(':')[0])}`}>
-                • {status.charAt(0).toUpperCase() + status.slice(1).toLowerCase()}
+                - {status.charAt(0).toUpperCase() + status.slice(1).toLowerCase()}
               </div>
             </div>
           ))}
@@ -167,7 +167,7 @@ export default function DashboardPage() {
           <div className="space-x-2">
             <button 
               onClick={async () => {
-                const url = await prompt('ENTER DOCUMENT URL:\n\n• NOTION PAGE\n• GOOGLE DRIVE FILE\n• LOCAL PATH');
+                const url = await prompt('ENTER DOCUMENT URL:\n\n- NOTION PAGE\n- GOOGLE DRIVE FILE\n- LOCAL PATH');
                 if (url) {
                   notify(`NOT IMPLEMENTED\nURL: ${url}`, 'warning');
                 }
@@ -226,6 +226,8 @@ export default function DashboardPage() {
                   <th className="text-left p-3" style={{ fontWeight: '500', color: '#2C3E50' }}>Source</th>
                   <th className="text-left p-3" style={{ fontWeight: '500', color: '#2C3E50' }}>Title</th>
                   <th className="text-left p-3" style={{ fontWeight: '500', color: '#2C3E50' }}>Status</th>
+                  <th className="text-left p-3" style={{ fontWeight: '500', color: '#2C3E50' }}>Chunks</th>
+                  <th className="text-left p-3" style={{ fontWeight: '500', color: '#2C3E50' }}>Entities</th>
                   <th className="text-left p-3" style={{ fontWeight: '500', color: '#2C3E50' }}>Created</th>
                   <th className="text-left p-3" style={{ fontWeight: '500', color: '#2C3E50' }}>Actions</th>
                 </tr>
@@ -248,8 +250,8 @@ export default function DashboardPage() {
                         }}
                       />
                     </td>
-                    <td className="p-3" style={{ color: '#7F8C8D', fontSize: '13px' }}>
-                      {doc.id.substring(0, 8)}...
+                    <td className="p-3" style={{ color: '#7F8C8D', fontSize: '13px', fontFamily: 'monospace' }}>
+                      {doc.id}
                     </td>
                     <td className="p-3" style={{ textTransform: 'uppercase' }}>{doc.source_type}</td>
                     <td className="p-3">
@@ -277,6 +279,12 @@ export default function DashboardPage() {
                         {doc.status.charAt(0).toUpperCase() + doc.status.slice(1)}
                       </span>
                     </td>
+                    <td className="p-3" style={{ fontSize: '13px', color: '#2C3E50', fontFamily: 'monospace' }}>
+                      {doc.chunk_count ?? doc.chunks_count ?? 0}
+                    </td>
+                    <td className="p-3" style={{ fontSize: '13px', color: '#2C3E50', fontFamily: 'monospace' }}>
+                      {doc.entity_count ?? doc.entities_count ?? 0}
+                    </td>
                     <td className="p-3" style={{ fontSize: '13px' }}>
                       {new Date(doc.created_at).toLocaleDateString()}
                     </td>
@@ -292,32 +300,21 @@ export default function DashboardPage() {
                           display: 'inline-block'
                         }}
                       >
-                        ✏️ Edit
+                        Edit
                       </Link>
                       {(doc.status === 'discovered' || doc.status === 'failed') && (
                         <button 
                           onClick={async () => {
-                            const confirmed = await confirm(`Process document "${doc.title}"?\n\nThis will:\n• Chunk the document\n• Extract entities\n• Generate embeddings\n• Store in vector database`);
+                            const confirmed = await confirm(`Process document "${doc.title}"?\n\nThis will:\n- Chunk the document\n- Extract entities\n- Generate embeddings\n- Store in vector database`);
                             if (confirmed) {
                               try {
                                 setProcessingDocs(prev => new Set(prev).add(doc.id));
-                                const response = await fetch(`http://localhost:8001/api/documents/${doc.id}/process`, {
-                                  method: 'POST',
-                                  headers: { 'Content-Type': 'application/json' }
-                                });
-                                if (response.ok) {
-                                  notify(`Processing started for "${doc.title}"`, 'success');
-                                  queryClient.invalidateQueries({ queryKey: ['documents'] });
-                                } else {
-                                  notify(`Failed to start processing`, 'error');
-                                  setProcessingDocs(prev => {
-                                    const next = new Set(prev);
-                                    next.delete(doc.id);
-                                    return next;
-                                  });
-                                }
+                                await documentApi.reprocess(doc.id);
+                                notify(`Processing started for "${doc.title}"`, 'success');
+                                queryClient.invalidateQueries({ queryKey: ['documents'] });
                               } catch (error: any) {
-                                notify(`Error: ${error.message}`, 'error');
+                                const detail = error?.response?.data?.detail ? `: ${error.response.data.detail}` : error?.message ? `: ${error.message}` : '';
+                                notify(`Failed to start processing${detail}`, 'error');
                                 setProcessingDocs(prev => {
                                   const next = new Set(prev);
                                   next.delete(doc.id);
@@ -337,7 +334,7 @@ export default function DashboardPage() {
                             opacity: processingDocs.has(doc.id) ? 0.7 : 1
                           }}
                         >
-                          {processingDocs.has(doc.id) ? '⏳ Starting...' : '⚙️ Process'}
+                          {processingDocs.has(doc.id) ? 'Starting...' : 'Process'}
                         </button>
                       )}
                       {doc.status === 'processing' && (
@@ -349,7 +346,7 @@ export default function DashboardPage() {
                           display: 'inline-block',
                           animation: 'pulse 1.5s infinite'
                         }}>
-                          ⏳ Processing...
+                          Processing...
                         </span>
                       )}
                       <button 
@@ -368,25 +365,50 @@ export default function DashboardPage() {
                           fontSize: '13px'
                         }}
                       >
-                        🗑 Delete
+                        Delete
                       </button>
                       {doc.status !== 'discovered' && (
-                        <button 
+                        <button
                           onClick={async () => {
-                            const chunkSize = await prompt(`Rechunk document "${doc.title}"?\nCurrent chunk size: 1500 bytes\nEnter new chunk size (bytes):`, '1500');
-                            if (chunkSize && !isNaN(parseInt(chunkSize))) {
-                              notify(`Rechunking not yet implemented.\nWould rechunk with size: ${chunkSize} bytes`, 'warning');
+                            const confirmed = await confirm(
+                              `Rechunk document "${doc.title}"?\n\n` +
+                              `This will:\n` +
+                              `- Delete all existing chunks\n` +
+                              `- Clear all entity mentions\n` +
+                              `- Clear all relationships\n` +
+                              `- Reprocess the document with default chunking parameters`
+                            );
+
+                            if (confirmed) {
+                              try {
+                                setProcessingDocs(prev => new Set(prev).add(doc.id));
+
+                                const response = await documentApi.rechunk(doc.id);
+
+                                notify(`Rechunking started for "${doc.title}"`, 'success');
+                                queryClient.invalidateQueries({ queryKey: ['documents'] });
+                              } catch (error: any) {
+                                notify(`Rechunk failed: ${error.message}`, 'error');
+                                setProcessingDocs(prev => {
+                                  const next = new Set(prev);
+                                  next.delete(doc.id);
+                                  return next;
+                                });
+                              }
                             }
                           }}
+                          disabled={processingDocs.has(doc.id) || doc.status === 'processing'}
                           style={{
-                            backgroundColor: '#E8F8F5',
-                            color: '#27AE60',
+                            backgroundColor: processingDocs.has(doc.id) || doc.status === 'processing' ? '#E1E8ED' : '#E8F8F5',
+                            color: processingDocs.has(doc.id) || doc.status === 'processing' ? '#7F8C8D' : '#27AE60',
                             padding: '6px 12px',
                             border: 'none',
-                            fontSize: '13px'
+                            fontSize: '13px',
+                            cursor: processingDocs.has(doc.id) || doc.status === 'processing' ? 'not-allowed' : 'pointer',
+                            opacity: processingDocs.has(doc.id) || doc.status === 'processing' ? 0.6 : 1
                           }}
                         >
-                          🔄 Rechunk
+                          {processingDocs.has(doc.id) ? 'Rechunking...' : 'Rechunk'}
                         </button>
                       )}
                     </td>
@@ -397,7 +419,7 @@ export default function DashboardPage() {
             
             {/* Table Footer */}
             <div className="p-2 text-xs text-gray-600 border-t border-black">
-              [TAB] select • [E] edit • [D] delete • [R] rechunk
+              [TAB] select - [E] edit - [D] delete - [R] rechunk
             </div>
           </div>
         )}

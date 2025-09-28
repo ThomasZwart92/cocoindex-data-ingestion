@@ -22,6 +22,7 @@ interface Relationship {
   target_entity_id: string;
   relationship_type: string;
   confidence: number;
+  relationship_label?: string;
 }
 
 interface GraphPreviewProps {
@@ -56,6 +57,13 @@ const getEntityColor = (type: string): string => {
 };
 
 export default function GraphPreview({ entities, relationships }: GraphPreviewProps) {
+  console.log('GraphPreview component props:', { 
+    entities: entities?.length || 0, 
+    relationships: relationships?.length || 0,
+    entitiesSample: entities?.slice(0, 2),
+    relationshipsSample: relationships?.slice(0, 2)
+  });
+  
   const fgRef = useRef<any>();
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const [graphData, setGraphData] = useState<any>({ nodes: [], links: [] });
@@ -70,10 +78,10 @@ export default function GraphPreview({ entities, relationships }: GraphPreviewPr
   const [isUntangling, setIsUntangling] = useState(false);
   const [showTooltip, setShowTooltip] = useState(true);
   
-  // Graph customization controls
+  // Graph customization controls - stronger forces for better separation
   const [nodeSize, setNodeSize] = useState(0.8);
-  const [linkDistance, setLinkDistance] = useState(120);
-  const [chargeStrength, setChargeStrength] = useState(-240);
+  const [linkDistance, setLinkDistance] = useState(150);  // Increased from 120
+  const [chargeStrength, setChargeStrength] = useState(-800);  // Much stronger repulsion (was -240)
 
   // Handle click outside to close dropdown
   useEffect(() => {
@@ -94,6 +102,8 @@ export default function GraphPreview({ entities, relationships }: GraphPreviewPr
   }, [isDropdownOpen]);
 
   useEffect(() => {
+    console.log('GraphPreview data:', { entities: entities?.length, relationships: relationships?.length });
+    
     let filteredEntities = entities;
     let filteredRelationships = relationships;
     
@@ -105,17 +115,22 @@ export default function GraphPreview({ entities, relationships }: GraphPreviewPr
         focusedEntities.has(rel.target_entity_id)
       );
       
-      // Get all entity IDs involved in these relationships
-      const involvedEntityIds = new Set(focusedEntities);
-      filteredRelationships.forEach(rel => {
-        involvedEntityIds.add(rel.source_entity_id);
-        involvedEntityIds.add(rel.target_entity_id);
-      });
-      
-      // Filter entities to only those involved
-      filteredEntities = entities.filter(entity => 
-        involvedEntityIds.has(entity.id)
-      );
+      // If there are relationships, show only connected entities
+      if (filteredRelationships.length > 0) {
+        // Get all entity IDs involved in these relationships
+        const involvedEntityIds = new Set(focusedEntities);
+        filteredRelationships.forEach(rel => {
+          involvedEntityIds.add(rel.source_entity_id);
+          involvedEntityIds.add(rel.target_entity_id);
+        });
+        
+        // Filter entities to only those involved
+        filteredEntities = entities.filter(entity => 
+          involvedEntityIds.has(entity.id)
+        );
+      }
+      // If no relationships, keep all entities visible but highlight the focused ones
+      // This prevents the graph from becoming empty when focusing on an isolated node
     }
     
     // Convert entities to nodes
@@ -128,16 +143,28 @@ export default function GraphPreview({ entities, relationships }: GraphPreviewPr
       val: (10 + (entity.confidence * 10)) * nodeSize * (focusedEntities.has(entity.id) ? 1.5 : 1), // Larger if focused
     }));
 
-    // Convert relationships to links
-    const links = filteredRelationships.map(rel => ({
-      source: rel.source_entity_id,
-      target: rel.target_entity_id,
-      type: rel.relationship_type,
-      confidence: rel.confidence,
-      color: `rgba(107, 114, 128, ${0.2 + rel.confidence * 0.6})`, // Opacity based on confidence
-      width: 1 + rel.confidence * 2, // Width based on confidence
-    }));
+    // Create a set of valid entity IDs for quick lookup
+    const validEntityIds = new Set(filteredEntities.map(e => e.id));
 
+    // Convert relationships to links, filtering out invalid references
+    const links = filteredRelationships
+      .filter(rel => {
+        const isValid = validEntityIds.has(rel.source_entity_id) && validEntityIds.has(rel.target_entity_id);
+        if (!isValid) {
+          console.warn(`Skipping invalid relationship: source=${rel.source_entity_id}, target=${rel.target_entity_id}`);
+        }
+        return isValid;
+      })
+      .map(rel => ({
+        source: rel.source_entity_id,
+        target: rel.target_entity_id,
+        type: rel.relationship_label || rel.relationship_type,
+        confidence: rel.confidence,
+        color: `rgba(107, 114, 128, ${0.2 + rel.confidence * 0.6})`, // Opacity based on confidence
+        width: 1 + rel.confidence * 2, // Width based on confidence
+      }));
+
+    console.log('GraphPreview processed:', { nodes: nodes.length, links: links.length });
     setGraphData({ nodes, links });
   }, [entities, relationships, nodeSize, focusedEntities]);
   
@@ -150,18 +177,19 @@ export default function GraphPreview({ entities, relationships }: GraphPreviewPr
       }
       
       // Update charge strength with distance-based falloff
-      // This creates a repulsion that only affects very close nodes
+      // Stronger repulsion for better node separation
       if (fgRef.current.d3Force('charge')) {
         fgRef.current.d3Force('charge')
           .strength(chargeStrength)
-          .distanceMax(80); // Apply charge within 80px radius
+          .distanceMax(300); // Apply charge within wider radius for better separation
       }
       
-      // Update collision force for close proximity only
+      // Update collision force for better spacing
       if (fgRef.current.d3Force('collide')) {
         fgRef.current.d3Force('collide')
-          .radius((node: any) => (node.val || 10) + 5) // Collision radius with fallback
-          .strength(1); // Full collision strength
+          .radius((node: any) => (node.val || 10) + 15) // More space between nodes
+          .strength(1)
+          .iterations(3); // More iterations for better collision detection
       }
       
       // Reheat the simulation to apply changes
@@ -176,7 +204,7 @@ export default function GraphPreview({ entities, relationships }: GraphPreviewPr
       if (container) {
         setDimensions({
           width: container.clientWidth,
-          height: 1200,
+          height: 1200,  // Match the container height
         });
       }
     };
@@ -192,22 +220,41 @@ export default function GraphPreview({ entities, relationships }: GraphPreviewPr
       // Small delay to ensure graph is fully initialized
       setTimeout(() => {
         if (fgRef.current) {
-          // Apply initial forces
+          // Zoom to fit all nodes in view
+          fgRef.current.zoomToFit(400, 50); // 400ms animation, 50px padding
+          
+          // Apply initial forces with stronger settings for better node separation
           if (fgRef.current.d3Force('link')) {
-            fgRef.current.d3Force('link').distance(linkDistance);
+            fgRef.current.d3Force('link')
+              .distance(linkDistance)
+              .strength(0.5);  // Add link strength
           }
           if (fgRef.current.d3Force('charge')) {
             fgRef.current.d3Force('charge')
               .strength(chargeStrength)
-              .distanceMax(80);
+              .distanceMax(300);  // Increased from 80 for longer range repulsion
           }
           if (fgRef.current.d3Force('collide')) {
             fgRef.current.d3Force('collide')
-              .radius((node: any) => (node.val || 10) + 5)
-              .strength(1);
+              .radius((node: any) => (node.val || 10) + 15)  // More space between nodes
+              .strength(1)
+              .iterations(3);  // More iterations for better collision detection
           }
-          // Reheat to apply the forces
+          // Add center force to keep graph centered
+          if (fgRef.current.d3Force('center')) {
+            fgRef.current.d3Force('center')
+              .x(dimensions.width / 2)
+              .y(dimensions.height / 2);
+          }
+          // Reheat with more energy for better initial spread
           fgRef.current.d3ReheatSimulation();
+          
+          // Use the d3 force simulation directly to set alpha target
+          const forceEngine = fgRef.current.d3Force;
+          if (forceEngine) {
+            // Keep simulation running longer for better spread
+            fgRef.current.d3ReheatSimulation();
+          }
         }
       }, 500);
     }
@@ -471,7 +518,8 @@ export default function GraphPreview({ entities, relationships }: GraphPreviewPr
   return (
     <div id="graph-container" style={{ 
       width: '100%', 
-      height: '1200px', 
+      height: '1200px',  // Full height as requested
+      minHeight: '600px',  // Minimum height
       backgroundColor: '#F8F7F3',
       borderRadius: '8px',
       position: 'relative',
@@ -479,6 +527,22 @@ export default function GraphPreview({ entities, relationships }: GraphPreviewPr
     }}>
       {graphData.nodes.length > 0 ? (
         <>
+          {/* Debug info - remove after fixing */}
+          <div style={{
+            position: 'absolute',
+            top: '10px',
+            right: '10px',
+            zIndex: 100,
+            backgroundColor: 'rgba(255, 255, 255, 0.9)',
+            padding: '8px',
+            borderRadius: '4px',
+            fontSize: '12px',
+            border: '1px solid #E1E8ED'
+          }}>
+            Debug: {graphData.nodes.length} nodes, {graphData.links.length} links
+            <br />
+            Entities passed: {entities.length}, Relationships passed: {relationships.length}
+          </div>
           <ForceGraph2D
             ref={fgRef}
             graphData={graphData}

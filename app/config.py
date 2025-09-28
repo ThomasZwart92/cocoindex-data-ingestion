@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     
     # LlamaParse
     llamaparse_api_key: str = os.getenv("LLAMA_CLOUD_API_KEY", "")
-    llamaparse_base_url: str = os.getenv("LLAMA_PARSE_BASE_URL", "https://api.cloud.llamaindex.ai/api/parsing")
+    llamaparse_base_url: str = os.getenv("LLAMA_PARSE_BASE_URL", "https://api.cloud.llamaindex.ai/api/v1")
     
     # LLM APIs
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
@@ -75,13 +75,20 @@ class Settings(BaseSettings):
     google_drive_folder_ids: List[str] = json.loads(os.getenv("GOOGLE_DRIVE_FOLDER_IDS", "[]"))
     
     # CORS origins
-    cors_origins: List[str] = json.loads(os.getenv("CORS_ORIGINS", '["http://localhost:3000"]'))
+    cors_origins: List[str] = json.loads(os.getenv(
+        "CORS_ORIGINS",
+        '["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"]'
+    ))
     
     # Celery settings
     celery_broker_url: str = redis_url
     celery_result_backend: str = redis_url
     celery_task_time_limit: int = 3600  # 1 hour
     celery_task_soft_time_limit: int = 3300  # 55 minutes
+
+    # Entity pipeline controls
+    entity_pipeline_version: str = os.getenv("ENTITY_PIPELINE_VERSION", "v2")
+    legacy_entity_extractor_enabled: bool = os.getenv("COCOINDEX_LEGACY_ENTITY_EXTRACTOR", "0") == "1"
     
     class Config:
         case_sensitive = False

@@ -8,10 +8,10 @@ from typing import Dict, List, Any
 from dataclasses import dataclass
 import cocoindex
 from datetime import datetime
-import openai
 import os
 
 from app.models.metadata_taxonomy import DocumentCategory, TagTaxonomy, ExtractedMetadata
+from app.services.metadata_extraction_service import MetadataExtractionService
 from app.services.supabase_service import SupabaseService
 import logging
 
@@ -400,54 +400,9 @@ async def extract_metadata_for_document(document_id: str) -> Dict[str, Any]:
                 "document_id": document_id
             }
         
-        # Direct extraction using OpenAI
-        content = document["content"][:10000]  # Limit content for extraction
-        
-        # Extract metadata using LLM
-        prompt = create_extraction_prompt()
-        
-        openai.api_key = os.getenv("OPENAI_API_KEY")
-        response = openai.chat.completions.create(
-            model="gpt-4o-mini",  # Using the correct model name
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Extract metadata from this document:\n\n{content}"}
-            ],
-            temperature=0.1,
-            response_format={"type": "json_object"}
-        )
-        
-        # Parse the LLM response
-        try:
-            extracted_data = json.loads(response.choices[0].message.content)
-        except json.JSONDecodeError:
-            logger.error("Failed to parse LLM response as JSON")
-            extracted_data = {}
-        
-        # Extract additional tags using regex patterns
-        product_tags = extract_product_models(content)
-        component_tags = extract_components(content)
-        issue_tags = extract_issues(content)
-        
-        # Combine all tags
-        all_tags = combine_and_deduplicate_tags(
-            extracted_data.get("tags", []),
-            product_tags,
-            component_tags,
-            issue_tags
-        )
-        
-        # Prepare the final extracted metadata
-        extracted = {
-            "category": extracted_data.get("category"),
-            "tags": all_tags,
-            "author": extracted_data.get("author"),
-            "department": extracted_data.get("department"),
-            "version": extracted_data.get("version"),
-            "description": extracted_data.get("description"),
-            "confidence_scores": extracted_data.get("confidence_scores", {}),
-            "extraction_timestamp": datetime.utcnow().isoformat()
-        }
+        # Extract using the service (handles LLM + regex enrichment and audit fields)
+        service = MetadataExtractionService()
+        extracted = service.extract(document["content"])  # handles excerpting
         
         # Prepare metadata update
         metadata_update = {
@@ -459,7 +414,9 @@ async def extract_metadata_for_document(document_id: str) -> Dict[str, Any]:
             "description": extracted.get("description"),
             "ai_extracted": True,
             "extraction_timestamp": extracted.get("extraction_timestamp"),
-            "confidence_scores": extracted.get("confidence_scores", {})
+            "confidence_scores": extracted.get("confidence_scores", {}),
+            "extraction_model": extracted.get("extraction_model"),
+            "prompt_version": extracted.get("prompt_version"),
         }
         
         # Update document metadata in Supabase

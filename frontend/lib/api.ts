@@ -83,6 +83,11 @@ export interface Entity {
   is_verified?: boolean;
   is_edited?: boolean;
   original_name?: string;
+  canonical_entity_id?: string | null;
+  canonical_name?: string | null;
+  canonical_type?: string | null;
+  canonical_metadata?: Record<string, any> | null;
+  context?: string;
 }
 
 export interface ProcessingJob {
@@ -109,9 +114,13 @@ export const documentApi = {
   get: (id: string) => api.get<DocumentWithDetails>(`/api/documents/${id}`),
   update: (id: string, data: Partial<Document>) => 
     api.put<Document>(`/api/documents/${id}`, data),
-  delete: (id: string) => api.delete(`/api/documents/${id}`),
-  reprocess: (id: string) => api.post(`/api/documents/${id}/reprocess`),
-  rechunk: (id: string, params: any) => api.post(`/api/documents/${id}/rechunk`, params),
+  delete: (id: string, hardDelete: boolean = true) => 
+    api.delete(`/api/documents/${id}?hard_delete=${hardDelete}`),
+  reprocess: (id: string) => api.post(`/api/documents/${id}/process`),
+  rechunk: (id: string) =>
+    api.post(`/api/documents/${id}/process`, {
+      force_reprocess: true
+    }),
   
   // Chunks
   getChunks: (documentId: string) => 
@@ -123,7 +132,7 @@ export const documentApi = {
   
   // Entities  
   getEntities: (documentId: string) =>
-    api.get<Entity[]>(`/api/entities/${documentId}`),
+    api.get<Entity[]>(`/api/documents/${documentId}/entities`),
   updateEntity: (entityId: string, data: Partial<Entity>) =>
     api.put<Entity>(`/api/entities/${entityId}`, data),
   deleteEntity: (entityId: string) =>
@@ -143,11 +152,31 @@ export const documentApi = {
   deleteRelationship: (relationshipId: string) =>
     api.delete(`/api/relationships/${relationshipId}`),
   
+  // Duplicate detection and merging
+  findDuplicates: (documentId: string, threshold = 0.85, autoMerge = false) =>
+    api.post(`/api/entities/find-duplicates`, null, {
+      params: { document_id: documentId, threshold, auto_merge: autoMerge }
+    }),
+  mergeEntities: (entityIds: string[], targetName: string, targetType: string) =>
+    api.post(`/api/entities/merge`, {
+      entity_ids: entityIds,
+      target_name: targetName,
+      target_type: targetType
+    }),
+  
   // Metadata extraction
   extractMetadata: (documentId: string) =>
     api.post(`/api/documents/${documentId}/extract-metadata`),
   getSuggestedMetadata: (documentId: string) =>
     api.get<any>(`/api/documents/${documentId}/suggested-metadata`),
+  
+  // Review workflow
+  approve: (documentId: string) =>
+    api.post(`/api/documents/${documentId}/approve`),
+  reject: (documentId: string, reason: string) =>
+    api.post(`/api/documents/${documentId}/reject?reason=${encodeURIComponent(reason)}`),
+  getReviewStatus: (documentId: string) =>
+    api.get<any>(`/api/documents/${documentId}/review-status`),
 };
 
 export const processingApi = {
@@ -157,5 +186,5 @@ export const processingApi = {
 };
 
 export const systemApi = {
-  health: () => api.get<HealthStatus>('/api/health'),
+  health: () => api.get<HealthStatus>('/health'),
 };

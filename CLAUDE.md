@@ -1,512 +1,279 @@
-# CocoIndex Data Ingestion Portal - Development Context
+﻿# CocoIndex Data Ingestion Portal - Engineering Reference
 
-## CRITICAL RULES - NEVER VIOLATE THESE
-1. **NEVER USE MOCK DATA** - Always use real API integrations
-2. **ALWAYS USE REAL CONNECTORS** - NotionConnector and GoogleDriveConnector must connect to actual services
-3. **NO FAKE DOCUMENTS** - Do not create dummy/sample documents
-4. **REAL PROCESSING ONLY** - All background tasks must perform actual work
-5. **USE EXISTING API KEYS** - Notion and Google Drive credentials are in .env file
-6. **ALWAYS USE COCOINDEX DATAFLOW PATTERN** - Never use imperative service calls for processing
-7. **TRACK DOCUMENT STATE** - Every document must go through the state machine lifecycle
-8. **NO PLACEHOLDERS IN PRODUCTION** - Replace all placeholder implementations with real code
-9. **TABLE NAMING CONSISTENCY** - Supabase has 'chunks' and 'entities' tables (NOT 'document_chunks' or 'document_entities')
+## 1. Purpose & Scope
+- Single source of truth for how the ingestion portal is wired today.
+- Use alongside `architecture.md` for diagrams and `improvementPlan.md` for the backlog.
+- Audience: backend engineers, ingestion operators, and frontend contributors.
 
-## Project Overview
-Building a high-quality document ingestion system for < 100 documents with human-in-the-loop review, leveraging CocoIndex for processing.
+## 2. System Snapshot (2025-09-25 - Updated)
+### Working well
+- Celery pipeline in `app/tasks/document_tasks.py` drives parse -> chunk -> real embeddings -> entity extraction, writing results and state updates to Supabase.
+- **NEW**: Post-approval publishing pipeline (`publish_approved_document` task) automatically pushes approved documents to Qdrant and Neo4j.
+- **NEW**: Real OpenAI embeddings generation using `EmbeddingService` with text-embedding-3-small model (1536 dimensions).
+- **NEW**: Batch embedding processing (100 chunks per API call) for cost efficiency.
+- **NEW**: Publishing state machine with new states: `publishing`, `published`, `publish_failed`.
+- Two-tier contextual chunking with summaries and semantic focus is active via `app/processors/two_tier_chunker.py`.
+- Entity extraction v2 (`app/flows/entity_extraction_runner_v2.py`) stores mentions, canonical entities, and curated relationships through `SupabaseService`; the legacy extractor only runs when `ENTITY_PIPELINE_VERSION=v1` **and** `COCOINDEX_LEGACY_ENTITY_EXTRACTOR=1`.
+- FastAPI exposes document CRUD, review actions, SSE progress, search endpoints, and job utilities under `app/api/`.
+- Next.js dashboard (`frontend/app/page.tsx`) lets reviewers scan Notion/Drive, monitor jobs, review results, and reprocess documents.
+- Production connectors for Notion and Google Drive enforce credential-backed access (`app/connectors`).
+- **NEW**: QdrantService includes `store_document_embeddings` method for bulk vector storage.
+- **NEW**: Neo4jService includes `store_document_graph` method for entity/relationship storage.
 
-## 🚨 CURRENT STATUS (2025-08-25)
-**PROGRESS**: Core pipeline ~75% complete, three-tier chunking implemented
-- ✅ Three-tier hierarchical chunking with contextual enrichment working
-- ✅ Documents process and chunks persist correctly to database
-- ✅ LlamaParse integration implemented and working
-- ✅ Source connectors fetch documents successfully
-- ✅ Frontend shows processing status with hierarchical chunk display
-- ✅ Entity extraction improved - filters out common words, focuses on meaningful entities
-- ✅ Docker deployment configuration ready
+### Known gaps
+- The async Notion ingestion pipeline (`app/pipelines/notion_ingestion.py`) uses legacy SQLAlchemy helpers and is not mounted in `app/main.py`.
+- Celery `process_single_document` in `app/tasks/ingestion_tasks.py` returns mocked counts and should not be used outside tests.
+- Some bridge endpoints expect Qdrant/Neo4j collections that may be empty in fresh environments (though graceful fallbacks are now in place).
 
-**COMPLETED IMPROVEMENTS**:
-1. **Three-Tier Chunking**: Page → Paragraph → Semantic levels implemented
-2. **Contextual Summaries**: AI-generated context for each chunk
-3. **Semantic Focus**: Each semantic chunk tagged with its key concept
-4. **Database Schema**: Fixed table naming and field mappings
-5. **Entity Extraction**: Enhanced prompts and filtering to extract only meaningful entities
-6. **Deployment Ready**: Docker and docker-compose configurations for full stack
+### Near-term priorities
+- ✅ ~~Swap `EmbeddingGenerator` with `EmbeddingService.embed_batch` and upsert vectors through `QdrantService`.~~ **COMPLETED**
+- ✅ ~~Backfill Neo4j writes from approved canonical relationships~~ **COMPLETED via publishing pipeline**
+- Reconcile Notion pipeline storage with Supabase, then re-enable `/api/ingestion`.
+- Add integration coverage that exercises the full Celery pipeline against staging services.
 
-**Next Priority**: Generate embeddings for contextualized chunks and implement hybrid search
+## 3. Core Principles
+1. Fetch real content: connectors in `app/connectors` require valid API tokens or service accounts; only `/api/ingestion/test` uses synthetic text for smoke checks.
+2. Persist through Supabase: every pipeline stage must go through `app/services/supabase_service.py` so dashboards and state machines stay consistent.
+3. Honor the state machine: transitions must follow `DocumentState` rules in `app/models/document.py`.
+4. Run processing through Celery: the supported orchestration path is `process_document` in `app/tasks/document_tasks.py`; ad-hoc scripts should enqueue jobs rather than bypassing Celery.
+5. Centralize LLM work: use `app/services/llm_service.py` and `app/services/embedding_service.py` for model calls so retry, cost tracking, and fallbacks remain uniform.
+6. Keep progress observable: emit step updates with `_emit_progress` (SSE) and update `ProcessingJob` records to avoid blind background work.
 
-## Key Project Documents
-- **CocoIndex README**: @README.md
+## 4. Architecture Overview
+- **Sources** - Notion databases/pages and Google Drive folders via async connectors.
+- **Ingestion orchestration** - Celery workers (see `app/celery_app.py`) backed by Redis manage scanning jobs and per-document processing.
+- **Processing** - LlamaParse-driven parsing, hierarchical chunking, entity extraction, and Supabase persistence (`app/tasks/document_tasks.py` plus `app/processors` and `app/flows`).
+- **Storage** - Supabase (documents, chunks, mentions, canonical tables), optional Qdrant for vectors, optional Neo4j for graph exploration.
+- **API layer** - FastAPI app in `app/main.py` exposes documents, review, search, bridge, and streaming endpoints.
+- **Frontend** - Next.js dashboard in `frontend/` consumes REST + SSE to run reviews and manual scans.
 
-## Critical Reference Files
+## 5. Data Sources & Acquisition
+- **Notion**: `NotionConnector` (`app/connectors/notion_connector.py`) supports per-security-level tokens, change detection, and workspace scanning. Celery tasks in `app/tasks/ingestion_tasks.py` call `run_notion_ingestion` when ingestion is enabled.
+- **Google Drive**: `GoogleDriveConnector` (`app/connectors/google_drive_connector.py`) reads via service accounts, handles export of Google-native formats, and flags binary docs for LlamaParse.
+- **Local/CocoIndex flows**: CocoIndex example flows (`app/flows/document_ingestion_flow*.py`) remain for experimentation but are not part of the production path; enable them only when explicitly testing the declarative engine.
 
-### Core CocoIndex Components
-- `python/cocoindex/flow.py` - Flow definition and builder classes
-- `python/cocoindex/sources.py` - Source connectors (GoogleDrive, LocalFile, etc.)
-- `python/cocoindex/targets.py` - Target databases (Postgres, Qdrant, Neo4j)
-- `python/cocoindex/functions.py` - Built-in functions (chunking, embeddings)
-- `python/cocoindex/llm.py` - LLM integration specs
+## 6. Document Processing Pipeline
+1. **Job kickoff** - `/api/documents/{id}/process` (see `app/api/documents.py`) creates a `ProcessingJob` row and enqueues `process_document`.
+2. **Parse** - `parse_document` loads the source file and runs `DocumentParser` (`app/processors/parser.py`), using LlamaParse for complex docs and inline readers for plain text.
+3. **Chunk** - `chunk_document` clears prior chunks, then runs `TwoTierChunker.process_and_save`, producing parent + semantic chunks with contextual summaries stored in `chunks`.
+4. **Embeddings** - `generate_embeddings` now uses `EmbeddingService.embed_batch` to create real OpenAI embeddings (text-embedding-3-small, 1536 dimensions) and stores them in chunk metadata.
+5. **Entity extraction** - `extract_entities` builds `ChunkInput` records and calls `run_extract_mentions` (CocoIndex transform). Quality filters, canonicalization, relationship creation, and description refreshes operate through `SupabaseService`.
+6. **State transition** - Successful runs move the document to `pending_review`; failures capture the error, increment retries, and emit `failed` SSE events.
+7. **Progress reporting** - `_emit_progress` sends SSE updates, while job rows capture `current_step` and `progress` for dashboards.
+8. **Publishing** (NEW) - After approval, `publish_approved_document` task:
+   - Transitions document to `publishing` state
+   - Generates embeddings if not already done (using `EmbeddingService`)
+   - Stores vectors in Qdrant via `QdrantService.store_document_embeddings`
+   - Stores entities/relationships in Neo4j via `Neo4jService.store_document_graph`
+   - Updates document to `published` or `publish_failed` state
+   - Tracks publish attempts and errors for debugging
 
-### Essential Examples
-- `examples/docs_to_knowledge_graph/main.py` - Entity extraction and Neo4j integration
-- `examples/multi_format_indexing/main.py` - PDF/image processing with ColPali
-- `examples/gdrive_text_embedding/main.py` - Google Drive integration pattern
-- `examples/text_embedding_qdrant/main.py` - Qdrant vector storage pattern
+## 7. Review Workflow & State Management
+- Supabase tables (`documents`, `document_state_history`, `chunks`, `entity_mentions`, `canonical_entities`, `canonical_relationships`) are the source of truth; see `app/services/supabase_service.py`.
+- Review endpoints in `app/api/documents_review.py` approve or reject documents, update audit history, and **now trigger the publishing pipeline automatically on approval**.
+- Document states now include: `discovered`, `processing`, `pending_review`, `approved`, `rejected`, `ingested`, `failed`, `deleted`, **`publishing`, `published`, `publish_failed`**.
+- `DocumentStateManager` (`app/services/state_manager.py`) validates transitions, exposes metrics, and powers the SSE layer.
+- The Next.js dashboard surfaces chunk/entity counts and allows manual reprocessing, invoking the same Celery pipeline.
 
-### Key Functions Documentation
-- `docs/docs/ops/functions.md` - Complete function reference
+## 8. APIs & Background Services
+- **Documents** (`app/api/documents.py`) - list, detail, edit metadata, trigger processing, approve/reject, download chunks/entities.
+- **Processing** (`app/api/processing.py`) - legacy scan endpoints, SSE status streams, and job polling helpers (ingestion router currently detached in `app/main.py`).
+- **Search** (`app/api/search.py`) - wraps `SearchService` for vector, graph, and hybrid queries (expects embeddings/Qdrant data).
+- **Bridge** (`app/api/bridge.py`) - debugging utilities for Qdrant/Neo4j synchronization.
+- **Celery** - `app/tasks/document_tasks.py` for per-document processing and `app/tasks/ingestion_tasks.py` for source scans; `app/celery_app.py` configures the worker used by the API.
 
-## CocoIndex Key Concepts & Best Practices
+## 9. Frontend Overview
+- Built with Next.js 15 and React Query (`frontend/app/page.tsx`), providing:
+  - Live health badges for backend, Redis, Neo4j, and Qdrant.
+  - Notion/Google Drive scan triggers that poll `/api/process/jobs/{id}/status`.
+  - Document table with selection, hard delete, inline status, and reprocess actions.
+  - SSE progress feeds for active documents.
+- Uses `.env.local` for API base URLs and expects the backend on `http://localhost:8001` during development.
 
-### 1. Dataflow Programming Model
-- **No Mutations**: Each transformation creates a new field, never modify existing ones
-- **Observable Data**: All data before/after transformations is visible with lineage
-- **Declarative**: Define transformations, not imperative operations
+## 10. Configuration & Environment
+`app/config.py` loads all runtime settings. Windows dev scripts expect the `.venv312` virtual environment (dot prefix) so the interpreter resolves to `.venv312\Scripts\python.exe`; update the scripts if you keep Python elsewhere. Required keys:
 
-```python
-# GOOD: Create new fields
-doc["chunks"] = doc["content"].transform(...)
-chunk["embedding"] = chunk["text"].transform(...)
+```
+# Runtime & infrastructure
+ENVIRONMENT=development
+DATABASE_URL=postgresql://...
+REDIS_URL=redis://localhost:6379/0
 
-# BAD: Never mutate in place
-doc["content"] = process(doc["content"])  # Don't do this
+# Supabase
+SUPABASE_URL=https://...
+SUPABASE_KEY=...
+SUPABASE_HOST=...
+SUPABASE_DB_PASSWORD=...
+
+# Vector / graph stores
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=...
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=...
+
+# LLMs & parsing
+LLAMA_CLOUD_API_KEY=...
+LLAMA_PARSE_BASE_URL=https://api.cloud.llamaindex.ai/api/v1
+OPENAI_API_KEY=...
+GOOGLE_AI_API_KEY=...
+
+# Sources
+NOTION_API_KEY (legacy fallback)
+NOTION_API_KEY_[PUBLIC|CLIENT|PARTNER|EMPLOYEE|MANAGEMENT]_ACCESS=...
+GOOGLE_DRIVE_CREDENTIALS_PATH=...
+GOOGLE_DRIVE_FOLDER_IDS=[...]
+
+# Optional
+COHERE_API_KEY=...
+ENTITY_PIPELINE_VERSION=v2
+CORS_ORIGINS=["http://localhost:3000", ...]
 ```
 
-### 2. Flow Definition Pattern
-```python
-@cocoindex.flow_def(name="FlowName")
-def flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
-    # 1. Add sources
-    data_scope["documents"] = flow_builder.add_source(...)
-    
-    # 2. Add collectors
-    output = data_scope.add_collector()
-    
-    # 3. Transform with row context
-    with data_scope["documents"].row() as doc:
-        doc["processed"] = doc["content"].transform(...)
-        output.collect(...)
-    
-    # 4. Export to targets
-    output.export("name", target_spec)
+Default builds run with `ENTITY_PIPELINE_VERSION=v2`; set `ENTITY_PIPELINE_VERSION=v1` together with `COCOINDEX_LEGACY_ENTITY_EXTRACTOR=1` only when you intentionally need the legacy extractor.
+
+Keep secrets in `.env` locally and inject via the deployment platform in other environments.
+
+## 11. Local Development Workflow
+
+### Quick Start (Recommended)
+We now have simplified start/stop scripts that handle everything consistently:
+
+**Windows (PowerShell):**
+```powershell
+# Start infrastructure only (recommended for development)
+.\start.ps1
+
+# Start everything in Docker containers
+.\start.ps1 -Full
+
+# Stop everything
+.\stop.ps1
+
+# Stop and clean volumes
+.\stop.ps1 -Full -Clean
 ```
 
-### 3. Chunking Strategies - Three-Tier Contextual Retrieval
+**Linux/Mac (Bash):**
+```bash
+# Start infrastructure only (recommended for development)
+./start.sh
 
-Based on [Anthropic's Contextual Retrieval](https://www.anthropic.com/news/contextual-retrieval) research, we implement an enhanced three-tier hierarchical chunking strategy with contextual enrichment for maximum retrieval accuracy.
+# Start everything in Docker containers
+./start.sh --full
 
-#### Three-Tier Hierarchical Structure (IMPLEMENTED)
-```python
-# Level 1: Page-level chunks (1200 tokens) - Document overview
-doc["page_chunks"] = doc["content"].transform(
-    cocoindex.functions.SplitRecursively(),
-    language="markdown",
-    chunk_size=1200,
-    chunk_overlap=200
-)
+# Stop everything
+./stop.sh
 
-# Level 2: Paragraph chunks (200-400 tokens) - Balanced retrieval
-with doc["page_chunks"].row() as page:
-    page["para_chunks"] = page["text"].transform(
-        cocoindex.functions.SplitRecursively(),
-        chunk_size=300,
-        chunk_overlap=50
-    )
-    
-    # Level 3: Semantic chunks (20-100 tokens) - Ultra-precise vectors
-    with page["para_chunks"].row() as paragraph:
-        paragraph["semantic_chunks"] = paragraph["text"].transform(
-            SplitBySentences(),  # 1-3 sentences per chunk
-            max_tokens=100,
-            identify_focus=True  # Tags each chunk with semantic focus
-        )
-        
-        # Add contextual enrichment to all levels
-        with paragraph["semantic_chunks"].row() as chunk:
-            chunk["context"] = chunk["text"].transform(
-                GenerateChunkContext(doc_title, paragraph_context)
-            )
-            chunk["contextualized"] = f"{chunk['context']}\n\n{chunk['text']}"
+# Stop and clean volumes
+./stop.sh --full --clean
 ```
 
-#### Why Three Tiers?
-- **Page chunks**: Broad context for document-level queries
-- **Paragraph chunks**: Balanced for standard retrieval
-- **Semantic chunks**: Single-concept precision (solves vector pollution problem)
+The scripts will:
+1. Start infrastructure services (Redis, PostgreSQL, Neo4j, Qdrant) in Docker
+2. Detect your Python virtual environment (.venv312, venv312, .venv, or venv)
+3. Start the backend API on port 8005
+4. Start the Celery worker
+5. Start the frontend on port 3000
+6. Show combined logs (Ctrl+C to stop viewing, services continue running)
 
-#### Hybrid Search Strategy
-1. **Semantic Search**: Embeddings of contextualized chunks
-2. **BM25 Search**: Lexical matching on contextualized text
-3. **Fusion**: Combine results from both methods
-4. **Reranking**: Use Cohere or similar to rerank top 150 → top 20
-
-#### Performance Improvements
-- Contextual chunks alone: 35% reduction in retrieval failures
-- + BM25 hybrid: 49% reduction
-- + Reranking: 67% reduction
-
-### 4. LLM Integration
-```python
-# Entity extraction
-doc["entities"] = doc["content"].transform(
-    cocoindex.functions.ExtractByLlm(
-        llm_spec=cocoindex.LlmSpec(
-            api_type=cocoindex.LlmApiType.OPENAI,
-            model="gpt-4o"
-        ),
-        output_type=list[Entity],  # Your dataclass
-        instruction="Extract entities..."
-    )
-)
-```
-
-**Important LLM Provider Notes:**
-- **Gemini Token Requirements**: Minimum 1000 tokens for any output (auto-adjusted in our implementation)
-- **JSON Parsing**: Handle both raw JSON (OpenAI) and markdown-wrapped JSON (Gemini)
-- **Model Updates**: Using gemini-2.5-pro (not 1.5-flash which is outdated)
-- **Fallback Support**: Automatic fallback between OpenAI and Gemini on failures
-
-### 5. Multi-Database Architecture
-```python
-# Vector storage (Qdrant)
-output.export("vectors", 
-    cocoindex.targets.Qdrant(
-        connection=qdrant_conn,
-        collection_name="docs"
-    ))
-
-# Knowledge Graph (Neo4j)
-output.export("graph",
-    cocoindex.targets.Neo4j(
-        connection=neo4j_conn,
-        mapping=cocoindex.targets.Nodes(label="Document")
-    ))
-
-# Metadata (Postgres/Supabase)
-output.export("metadata",
-    cocoindex.targets.Postgres(
-        connection=postgres_conn
-    ))
-```
-
-### 6. Source Connectors
-
-#### Google Drive
-```python
-flow_builder.add_source(
-    cocoindex.sources.GoogleDrive(
-        service_account_credential_path="path/to/creds.json",
-        root_folder_ids=["folder_id"],
-        recent_changes_poll_interval=timedelta(minutes=30)
-    )
-)
-```
-
-#### Notion (Not Native - Custom Implementation Needed)
-- Use Notion API directly
-- Convert to CocoIndex-compatible format
-- Feed into flow as custom source
-
-### 7. Document Parsing & Image Handling
-
-#### LlamaParse Three-Tier Strategy:
-```python
-from llama_parse import LlamaParse
-
-class ParseTier(Enum):
-    BALANCED = "balanced"        # $0.10/page - Start here
-    AGENTIC = "agentic"          # $0.40/page - Complex layouts
-    AGENTIC_PLUS = "agentic_plus"  # $1.00/page - Critical docs
-
-@cocoindex.op.function()
-def parse_document(content: bytes, tier: str = "balanced") -> tuple[str, dict]:
-    parser = LlamaParse(
-        api_key="...",
-        result_type="markdown",
-        parsing_mode=tier
-    )
-    
-    result = parser.parse_raw(content)
-    # LlamaParse extracts images and includes descriptions in markdown
-    return result.text, {"tier": tier, "needs_review": True}
-```
-
-#### Image Processing Pipeline:
-```python
-@cocoindex.op.function()
-def extract_and_process_images(content: bytes, doc_text: str) -> list[dict]:
-    """Extract images and generate rich metadata"""
-    images = []
-    
-    # Extract images from PDF
-    from pdf2image import convert_from_bytes
-    pdf_images = convert_from_bytes(content, dpi=300)
-    
-    for idx, img in enumerate(pdf_images):
-        # Convert to bytes
-        img_bytes = BytesIO()
-        img.save(img_bytes, format="PNG")
-        
-        # Generate caption with Vision API
-        caption = generate_image_caption(img_bytes.getvalue(), doc_text[:1000])
-        
-        # Generate embeddings
-        visual_embedding = ColPaliEmbedImage(model="vidore/colpali-v1.2")
-        text_embedding = EmbedText(model="text-embedding-3-small")
-        
-        images.append({
-            "page": idx + 1,
-            "bytes": img_bytes.getvalue(),
-            "caption": caption,
-            "visual_embedding": visual_embedding(img_bytes.getvalue()),
-            "text_embedding": text_embedding(caption),
-            "needs_review": True
-        })
-    
-    return images
-
-def generate_image_caption(image_bytes: bytes, context: str) -> str:
-    """Use GPT-4 Vision to generate detailed captions"""
-    response = openai.chat.completions.create(
-        model="gpt-4-vision-preview",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": f"Context: {context}\nDescribe this image:"},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(image_bytes).decode()}"}}
-            ]
-        }]
-    )
-    return response.choices[0].message.content
-```
-
-#### Storage Strategy:
-```python
-# Store images with multiple vectors in Qdrant
-image_output.export("document_images",
-    cocoindex.targets.Qdrant(
-        connection=qdrant_conn,
-        collection_name="images",
-        vectors=[
-            {"name": "visual", "field": "visual_embedding", "size": 1024},
-            {"name": "text", "field": "text_embedding", "size": 1536}
-        ]
-    ),
-    metadata={
-        "document_id": doc["id"],
-        "page_number": img["page"],
-        "caption": img["caption"],
-        "storage_url": img["supabase_url"]
-    }
-)
-```
-
-#### Search Capabilities:
-- **Text search**: Find images by caption content
-- **Visual search**: Find similar images (ColPali)
-- **Hybrid search**: Combine both approaches
-- **Context-aware**: Images linked to document chunks
-
-### 8. Error Handling & Retries
-- CocoIndex handles incremental processing automatically
-- Failed items can be retried
-- State is persisted in Postgres
-
-### 9. Authentication Pattern
-```python
-# Store credentials securely
-conn = cocoindex.add_auth_entry(
-    "connection_name",
-    cocoindex.targets.QdrantConnection(
-        grpc_url="http://localhost:6334"
-    )
-)
-```
-
-## Implementation Critical Path
-
-### Phase 0: Foundation (BLOCKING)
-**Without these, nothing works:**
-1. Async infrastructure (Celery + Redis)
-2. State machine for document lifecycle
-3. Idempotent operations
-4. Error handling with retries
-
-### Must-Have Quality Features
-- Multiple chunking strategies
-- Manual chunk editing
-- Entity correction
-- Custom metadata fields
-- Multi-model comparison (GPT-4 vs Gemini)
-
-### Can Defer (Scale Features)
-- Batch operations
-- Auto-approval
-- WebSockets
-- Complex caching
-
-## Common Pitfalls to Avoid
-
-1. **Don't Skip Async**: Without Celery/Redis, app will hang during 30+ second operations
-2. **Don't Skip State Management**: Will lose track of documents
-3. **Don't Build UI First**: Pipeline must work before adding interface
-4. **Don't Use pgvector**: Qdrant has 2-3x better latency for chatbot use case
-5. **Don't Skip Neo4j**: Knowledge graphs are worth the complexity even at small scale
-6. **Don't Ignore Images**: They contain critical information - captions and OCR are essential
-7. **Don't Auto-approve Captions**: AI-generated image descriptions need human review for quality
-8. **Gemini Token Minimum**: Gemini requires at least 1000 tokens to generate any output (unlike OpenAI which works with 50+)
-9. **JSON Response Parsing**: Gemini often wraps JSON in markdown code blocks (```json...```), while OpenAI returns raw JSON
-10. **@flow_def Decorator**: Functions decorated with `@cocoindex.flow_def` become Flow objects, not callable functions
-11. **LocalMemory Doesn't Exist**: CocoIndex only has file-based sources (LocalFile, GoogleDrive, AmazonS3, AzureBlob)
-12. **Not Everything Needs a Flow**: Single-document, synchronous operations don't benefit from CocoIndex flows
-
-## When to Use CocoIndex Flows vs Direct Implementation
-
-### Use CocoIndex Flows When:
-- **Batch Processing**: Processing multiple documents/files
-- **Incremental Updates**: Need to track changes and only process new/modified items
-- **Data Lineage**: Need visibility into transformation pipeline
-- **Multiple Targets**: Exporting to multiple databases (Qdrant + Neo4j + Postgres)
-- **Complex Pipelines**: Multi-stage transformations with nested operations
-- **Continuous Monitoring**: Watching folders for changes with refresh intervals
-
-### Use Direct Implementation When:
-- **Single Document Operations**: Processing one item at a time (like metadata extraction)
-- **Synchronous Operations**: Need immediate results without async processing
-- **Simple Transformations**: Single-step operations without complex pipelines
-- **In-Memory Data**: Working with data already in memory (not from files)
-- **API Endpoints**: Direct request-response patterns
-- **No State Tracking Needed**: One-time operations without incremental updates
-
-### CocoIndex Flow Instantiation Patterns
-
-#### Pattern 1: Using @flow_def decorator (Recommended)
-```python
-@cocoindex.flow_def(name="MyFlow")
-def my_flow(flow_builder: FlowBuilder, data_scope: DataScope):
-    # Define flow logic
-    pass
-
-# The decorated function IS the flow object
-flow = my_flow  # NOT my_flow() - it's already a Flow object!
-flow.reset()
-flow.run()
-```
-
-#### Pattern 2: Manual flow building (for dynamic flows)
-```python
-def build_custom_flow():
-    flow_builder = cocoindex.FlowBuilder("CustomFlow")
-    data_scope = cocoindex.DataScope()
-    
-    # Add sources and transformations
-    data_scope["data"] = flow_builder.add_source(...)
-    
-    return flow_builder.build()
-
-flow = build_custom_flow()
-flow.run()
-```
-
-### Available CocoIndex Sources
-- `cocoindex.sources.LocalFile(path="...")` - Read files from local filesystem
-- `cocoindex.sources.GoogleDrive(...)` - Read from Google Drive
-- `cocoindex.sources.AmazonS3(...)` - Read from S3 buckets
-- `cocoindex.sources.AzureBlob(...)` - Read from Azure Blob Storage
-
-**Note**: There is NO `LocalMemory` source. For in-memory data, use direct implementation.
-
-## Development Commands
+### Docker Compose Options
+For more control, use Docker Compose directly:
 
 ```bash
-# Initialize CocoIndex
-import cocoindex
-cocoindex.init()
+# Start infrastructure only
+docker-compose -f docker-compose.dev.yml up -d
 
-# Run a flow (when using @flow_def decorator)
-flow = text_embedding_flow  # Note: NO parentheses - it's already a Flow object
-flow.reset()  # Clear any previous state
-flow.run()
-
-# Check incremental processing
-flow.run()  # Only processes changes
-
-# For debugging flow issues
-print(type(my_flow))  # Should show <class 'cocoindex.Flow'> if decorated
-```
-
-## Key Architecture Decisions
-
-### Why These Technologies:
-- **CocoIndex**: Handles incremental processing, lineage tracking
-- **LlamaParse**: AI-powered document parsing with quality tiers (perfect for low-volume, high-quality)
-- **Qdrant > pgvector**: Better latency, native multi-vector support
-- **Neo4j**: Powerful relationship queries for context
-- **Celery + Redis**: Essential for async processing
-- **Supabase**: Auth + PostgreSQL + storage in one
-
-### Document Processing State Machine:
-```
-DISCOVERED → PROCESSING → PENDING_REVIEW → APPROVED → INGESTED
-                ↓             ↓             ↓
-             FAILED       REJECTED      FAILED
-```
-
-## Quality Metrics for Success
-- 100% chunks reviewed before storage
-- 100% entities validated
-- 0% data loss on failures
-- < 30s processing per document
-- < 200ms vector search latency
-
-## Docker Deployment
-
-### Quick Start
-```bash
-# Start all services
+# Start everything in containers
 docker-compose -f docker-compose.full.yml up -d
 
-# Check service health
-docker-compose -f docker-compose.full.yml ps
-
 # View logs
-docker-compose -f docker-compose.full.yml logs -f backend
+docker-compose -f docker-compose.dev.yml logs -f
 
-# Stop all services
-docker-compose -f docker-compose.full.yml down
+# Stop services
+docker-compose -f docker-compose.dev.yml down
+
+# Stop and remove volumes
+docker-compose -f docker-compose.dev.yml down -v
 ```
 
-### Service Architecture
-- **Frontend**: Nginx serving React app on port 3000
-- **Backend**: FastAPI + Uvicorn on port 8001
-- **Celery Worker**: Background task processing
-- **Postgres**: Primary database on port 5432
-- **Redis**: Cache and Celery broker on port 6379
-- **Neo4j**: Knowledge graph on ports 7474/7687
-- **Qdrant**: Vector database on port 6333
-- **Supabase**: External service (not dockerized)
+### Manual Startup (Alternative)
+If you prefer manual control:
 
-### Environment Variables
-Required in `.env` file:
-- `OPENAI_API_KEY`
-- `GEMINI_API_KEY`
-- `SUPABASE_URL`
-- `SUPABASE_KEY`
-- `NOTION_API_KEY`
-- `GOOGLE_DRIVE_CREDENTIALS_PATH`
-- `LLAMAPARSE_API_KEY`
-- `NEO4J_PASSWORD`
-- `QDRANT_API_KEY`
+1. **Dependencies** - start infrastructure containers:
+   ```bash
+   docker-compose -f docker-compose.dev.yml up -d
+   ```
 
-### Deployment Options
-1. **Local Development**: Use docker-compose.yml (services only)
-2. **Full Stack Local**: Use docker-compose.full.yml (includes app)
-3. **Production**: Deploy to cloud with managed services
-   - Use managed Postgres (RDS, Cloud SQL)
-   - Use managed Redis (ElastiCache, Cloud Memorystore)
-   - Deploy backend on Cloud Run/App Engine/ECS
-   - Deploy frontend on CDN (CloudFront, Cloudflare)
+2. **Backend API** - in your virtual environment:
+   ```bash
+   python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8005
+   ```
 
-## Remember
-**Quality > Features > Scale**
+3. **Celery worker** - in your virtual environment:
+   ```bash
+   celery -A app.celery_app worker --loglevel=info --pool=solo
+   ```
 
-Build simple and working first, add complexity only when needed.
+4. **Frontend** - in the frontend directory:
+   ```bash
+   cd frontend && npm run dev
+   ```
+
+5. **Smoke check** - verify services:
+   - Backend health: `http://localhost:8005/health`
+   - Frontend: `http://localhost:3000`
+   - Neo4j Browser: `http://localhost:7474`
+   - Qdrant Dashboard: `http://localhost:6333/dashboard`
+
+### Environment Setup
+1. Copy `.env.example` to `.env`
+2. Fill in your API keys and credentials
+3. Ensure your virtual environment is created: `python -m venv .venv312`
+4. Install dependencies: `pip install -r requirements.txt`
+5. Install frontend dependencies: `cd frontend && npm install`
+
+### Legacy PowerShell Scripts
+The old scripts in `scripts/` directory (`start-dev.ps1`, `stop-dev.ps1`) are being replaced. If you still need them:
+```powershell
+# Old startup
+pwsh scripts/start-dev.ps1
+
+# Old shutdown
+pwsh scripts/stop-dev.ps1 -StopContainers
+```
+
+## 12. Observability & Troubleshooting
+- **Celery worker recovery**: `restartCelery.md` captures PowerShell commands to kill stray workers and restart the `.venv312` task with `--pool=solo`; use it if the dashboard warns about missing workers or the wrong virtual environment.
+- Server-Sent Events: `/api/documents/{id}/progress` (documents) and `/api/documents/{id}/stream` (processing) provide real-time updates.
+- Job status: `/api/process/jobs/{job_id}/status` surfaces Celery progress; logs stream to the `logs/` directory.
+- `app/services/progress_tracker.py` centralizes programmatic progress pushes.
+- For ingestion scans, inspect Celery logs (`app/tasks/ingestion_tasks.py`) and the in-memory `JobTracker` exposed via `/api/process/sources/scan` responses.
+
+## 13. Outstanding Work & Risks
+- ✅ ~~Replace placeholder embeddings and wire Qdrant/Neo4j updates~~ **COMPLETED - Real embeddings and publishing pipeline implemented**
+- Align Notion ingestion (`app/pipelines/notion_ingestion.py`) with Supabase-first storage to avoid divergent SQLAlchemy models.
+- Audit bridge endpoints so destructive helpers are gated in shared environments.
+- Expand automated tests to cover canonicalization, relationship quality filters, and end-to-end retries across real documents.
+- Monitor OpenAI API costs for embedding generation (currently using text-embedding-3-small at $0.020 per 1M tokens).
+
+## 14. Reference Index
+- `app/tasks/document_tasks.py` - Celery pipeline, state updates, SSE emission, **publishing task**.
+- `app/processors/two_tier_chunker.py` - contextual chunk generation and Supabase persistence.
+- `app/flows/entity_extraction_runner_v2.py` - CocoIndex transform powering entity extraction v2.
+- `app/services/llm_service.py` - OpenAI/Gemini orchestration, caching, and fallbacks.
+- `app/services/embedding_service.py` - **NEW: OpenAI embedding generation with batch processing**.
+- `app/services/supabase_service.py` - Supabase CRUD and caching helpers, **canonical entity/relationship retrieval**.
+- `app/services/qdrant_service.py` - Vector storage, **store_document_embeddings method**.
+- `app/services/neo4j_service.py` - Graph storage, **store_document_graph method**.
+- `app/api/documents.py` / `app/api/documents_review.py` - REST surface for review workflow, **publishing trigger**.
+- `app/api/search.py` & `app/services/search_service.py` - hybrid search implementation.
+- `frontend/app/page.tsx` - reviewer dashboard logic.
+- `architecture.md` & `improvementPlan.md` - complementary roadmap context.
+- `approvalImplementation.md` - **NEW: Detailed implementation plan for post-approval publishing pipeline**.
+
+## Port binding troubleshooting
+- 2025-09-26: Local Windows host reserved port 8001 via HTTP.sys (System process), blocking uvicorn. Either delete the reservation (
+etsh http delete urlacl url=http://+:8001/) or run backend on an alternate port (currently 8005).
+- Update scripts/start-dev.ps1 to bind to 8005 and scripts/stop-dev.ps1 to release port 8005. Ensure frontend .env.local sets NEXT_PUBLIC_API_URL=http://localhost:8005. 
+
