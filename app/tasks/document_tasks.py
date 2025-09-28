@@ -30,8 +30,6 @@ from app.processors.two_tier_chunker import TwoTierChunker
 
 from app.processors.embedder import EmbeddingGenerator
 
-from app.processors.entity_extractor import EntityExtractor
-
 from app.config import settings
 
 from app.flows.entity_extraction_runner_v2 import run_extract_mentions, ChunkInput
@@ -683,46 +681,10 @@ def extract_entities(self, embedding_result: Dict[str, Any], job_id: str) -> Dic
         pipeline_version = (settings.entity_pipeline_version or "v2").lower()
 
         if pipeline_version == "v1":
-
-            if not settings.legacy_entity_extractor_enabled:
-
-                raise RuntimeError(
-
-                    "Legacy entity pipeline is disabled. Set COCOINDEX_LEGACY_ENTITY_EXTRACTOR=1 "
-
-                    "or switch ENTITY_PIPELINE_VERSION=v2."
-
-                )
-
-
-
-            extractor = EntityExtractor()
-
-            entities, relationships = extractor.extract(chunks, document_id)
-
-
-
-            if entities:
-
-                saved_entities = self.supabase.create_entities(entities)
-
-                logger.info(f"Saved {len(saved_entities)} entities via legacy pipeline")
-
-            else:
-
-                logger.info("Legacy entity extractor returned no entities")
-
-
-
-            if relationships:
-
-                saved_relationships = self.supabase.create_entity_relationships(relationships)
-
-                logger.info(f"Saved {len(saved_relationships)} relationships via legacy pipeline")
-
-            else:
-
-                logger.info("Legacy entity extractor returned no relationships")
+            raise RuntimeError(
+                "Legacy entity pipeline v1 has been removed. "
+                "Please use ENTITY_PIPELINE_VERSION=v2 (default)."
+            )
 
 
 

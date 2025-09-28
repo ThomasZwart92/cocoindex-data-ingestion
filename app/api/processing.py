@@ -175,7 +175,7 @@ async def get_celery_job_status(job_id: str):
     """
     try:
         from celery.result import AsyncResult
-        from app.worker import celery_app
+        from app.celery_app import celery_app
         
         result = AsyncResult(job_id, app=celery_app)
         
