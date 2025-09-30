@@ -542,7 +542,7 @@ KEYWORD_HINTS = {
 
 
 
-    'MATERIAL': ['alcohol', 'solvent', 'lubricant', 'cloth', 'compound', 'chemical', 'cleaner'],
+    'MATERIAL': ['alcohol', 'solvent', 'lubricant', 'cloth', 'towel', 'microfiber', 'pad', 'wipes', 'wipe', 'lint-free', 'compound', 'chemical', 'cleaner'],
 
 
 
@@ -951,6 +951,14 @@ def _filter_quality_mentions(mentions: List[EntityMention]) -> List[EntityMentio
 
 
         m.type = normalize_entity_type(m.type, t)
+        # Extra bias: treat cloth/towel/pad/wipe terms as MATERIAL unless strong tool counter-signal
+        _lx = (t or '').lower()
+        if (
+            m.type != 'MATERIAL'
+            and any(w in _lx for w in ['cloth','towel','paper towel','shop towel','microfiber','micro-fiber','micro fibre','wipe','wipes','wiping','pad','pads','lint-free','lint free'])
+            and not any(w in _lx for w in ['applicator tool','applicator-tip','applicator tip','specialized tool','equipment'])
+        ):
+            m.type = 'MATERIAL'
 
 
 
