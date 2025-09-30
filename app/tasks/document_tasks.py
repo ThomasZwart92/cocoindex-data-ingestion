@@ -4,11 +4,12 @@ import asyncio
 import json
 
 import logging
+from uuid import uuid4
 
 from collections import defaultdict
 from dataclasses import asdict
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from typing import List, Dict, Any, Optional
 
@@ -23,12 +24,14 @@ from app.models.chunk import Chunk, ChunkingStrategy
 from app.models.job import ProcessingJob, JobType, JobStatus
 
 from app.services.supabase_service import SupabaseService
+from app.services.embedding_service import EmbeddingService, EmbeddingResult
+from app.services.qdrant_service import QdrantService
+from app.services.neo4j_service import Neo4jService
 
 from app.processors.parser import DocumentParser
 
 from app.processors.two_tier_chunker import TwoTierChunker
 
-from app.processors.embedder import EmbeddingGenerator
 
 from app.config import settings
 
@@ -277,7 +280,8 @@ def parse_document(self, document_id: str, job_id: str) -> Dict[str, Any]:
                 "document_id": document_id,
                 "text": text_content,
                 "metadata": metadata,
-                "images": []
+                "images": [],
+                "pages": []
             }
 
         if not source_url:
@@ -311,7 +315,8 @@ def parse_document(self, document_id: str, job_id: str) -> Dict[str, Any]:
             "document_id": document_id,
             "text": parse_result["text"],
             "metadata": parse_result.get("metadata", {}),
-            "images": parse_result.get("images", [])
+            "images": parse_result.get("images", []),
+            "pages": parse_result.get("pages", [])
         }
 
     except Exception as e:
@@ -340,6 +345,7 @@ def chunk_document(self, parse_result: Dict[str, Any], job_id: str) -> Dict[str,
 
     document_id = parse_result["document_id"]
     text = parse_result["text"]
+    pages = parse_result.get("pages")
 
     logger.info(f"Chunking document {document_id} (attempt {self.request.retries + 1})")
 
@@ -394,6 +400,7 @@ def chunk_document(self, parse_result: Dict[str, Any], job_id: str) -> Dict[str,
                 content=text,
                 title=document_name,
                 metadata=metadata_template or None,
+                pages=pages,
             )
 
         try:
@@ -424,12 +431,12 @@ def chunk_document(self, parse_result: Dict[str, Any], job_id: str) -> Dict[str,
             if tier == "parent":
                 chunk_data.chunk_level = "page"
                 chunk_data.parent_chunk_id = None
-                chunk_data.chunking_strategy = "two_tier_parent"
+                chunk_data.chunking_strategy = "semantic"  # Use valid DB enum value
                 parent_summaries[chunk_data.id] = chunk_data.contextual_summary
                 position_in_parent: Optional[int] = None
             else:
                 chunk_data.chunk_level = "semantic"
-                chunk_data.chunking_strategy = "two_tier_semantic"
+                chunk_data.chunking_strategy = "semantic"  # Use valid DB enum value
                 parent_identifier = chunk_data.parent_chunk_id or ""
                 position_in_parent = semantic_positions[parent_identifier]
                 semantic_positions[parent_identifier] = position_in_parent + 1
@@ -437,12 +444,13 @@ def chunk_document(self, parse_result: Dict[str, Any], job_id: str) -> Dict[str,
 
             chunk_dict = asdict(chunk_data)
             chunk_dict["chunk_size"] = len(chunk_dict.get("chunk_text") or "")
-            chunk_dict["chunking_strategy"] = chunk_dict.get("chunking_strategy") or (
-                "two_tier_parent" if tier == "parent" else "two_tier_semantic"
-            )
-            chunk_dict["chunk_level"] = chunk_dict.get("chunk_level") or (
-                "page" if tier == "parent" else "semantic"
-            )
+            chunk_dict["chunking_strategy"] = "semantic"  # Use valid DB enum value
+            # Remove chunk_level as it doesn't exist in DB schema
+            chunk_dict.pop("chunk_level", None)
+            # Store chunk_level in metadata instead
+            if not chunk_dict.get("metadata"):
+                chunk_dict["metadata"] = {}
+            chunk_dict["metadata"]["chunk_level"] = "page" if tier == "parent" else "semantic"
             chunk_dict["bm25_tokens"] = chunk_dict.get("bm25_tokens") or []
             chunk_dict["position_in_parent"] = position_in_parent
             if tier != "parent":
@@ -496,12 +504,12 @@ def chunk_document(self, parse_result: Dict[str, Any], job_id: str) -> Dict[str,
         result_metadata["chunk_count_total"] = chunk_count
         result_metadata["semantic_chunk_count"] = semantic_count
 
+        # Do NOT include raw images in Celery results; they can be large/non-serializable
         return {
             "document_id": document_id,
             "chunk_ids": chunk_ids,
             "chunk_count": chunk_count,
             "metadata": result_metadata,
-            "images": parse_result.get("images", [])
         }
 
     except Exception as e:
@@ -509,113 +517,92 @@ def chunk_document(self, parse_result: Dict[str, Any], job_id: str) -> Dict[str,
         raise
 
 @celery_app.task(
-
     bind=True,
-
     base=DocumentTask,
-
     name="generate_embeddings",
-
     autoretry_for=(Exception,),
-
     retry_kwargs={'max_retries': 3, 'countdown': 10},
-
     retry_backoff=True,
-
-    retry_backoff_max=300
-
+    retry_backoff_max=300,
+    retry_jitter=True
 )
-
 def generate_embeddings(self, chunk_result: Dict[str, Any], job_id: str) -> Dict[str, Any]:
-
     """Generate embeddings for chunks with automatic retry"""
 
     document_id = chunk_result["document_id"]
-
     chunk_ids = chunk_result["chunk_ids"]
-
-    
 
     logger.info(f"Generating embeddings for {len(chunk_ids)} chunks (attempt {self.request.retries + 1})")
 
-    
-
     try:
-
-        # Update job progress
-
         self.supabase.update_job(job_id, {
-
             "progress": 60,
-
             "current_step": "Generating embeddings"
-
         })
-
-        
-
-        # Get chunks
 
         chunks = self.supabase.get_document_chunks(document_id)
 
-        
+        embedding_results: List[EmbeddingResult] = []
+        if settings.openai_api_key:
+            try:
+                embedding_service = EmbeddingService()
 
-        # Generate embeddings
+                async def _embed_chunks() -> List[EmbeddingResult]:
+                    texts = [chunk.chunk_text for chunk in chunks]
+                    return await embedding_service.embed_batch(texts, batch_size=100)
 
-        embedder = EmbeddingGenerator()
+                embedding_results = asyncio.run(_embed_chunks())
+                logger.info("Generated %d embedding vectors via EmbeddingService", len(embedding_results))
+            except Exception as embed_err:
+                logger.error("Failed to generate embeddings via EmbeddingService: %s", embed_err)
+                embedding_results = []
+        else:
+            logger.warning("OPENAI_API_KEY not configured; skipping embedding vector generation")
 
-        embedding_results = embedder.generate_embeddings(chunks)
+        now_iso = datetime.utcnow().isoformat()
+        embeddings_generated = 0
 
-        
+        for idx, chunk in enumerate(chunks):
+            updates: Dict[str, Any] = {
+                "embedding_id": chunk.embedding_id or str(uuid4())
+            }
 
-        # Update chunks with embedding IDs
+            if embedding_results and idx < len(embedding_results):
+                result = embedding_results[idx]
+                updates.update({
+                    "embedding_vector": result.embedding,
+                    "embedding_model": result.model,
+                    "embedding_dimensions": result.dimensions,
+                    "embedded_at": now_iso
+                })
+                embeddings_generated += 1
+            else:
+                updates["embedding_model"] = chunk.embedding_model or "text-embedding-3-small"
 
-        for chunk, embedding_id in zip(chunks, embedding_results):
-
-            self.supabase.update_chunk(chunk.id, {
-
-                "embedding_id": embedding_id,
-
-                "embedding_model": "text-embedding-3-small"
-
-            })
-
-        
-
-        # Update job progress
+            self.supabase.update_chunk(chunk.id, updates)
 
         self.supabase.update_job(job_id, {
-
             "progress": 75,
-
-            "current_step": f"Generated {len(embedding_results)} embeddings"
-
+            "current_step": f"Generated {embeddings_generated} embeddings"
         })
 
-        
+        logger.info(
+            "Prepared %d embeddings (%d vectors generated) for document %s",
+            len(chunks),
+            embeddings_generated,
+            document_id,
+        )
 
-        logger.info(f"Generated {len(embedding_results)} embeddings")
-
-        
-
+        # Ensure we do not propagate heavy/non-serializable fields
+        sanitized = {k: v for k, v in (chunk_result or {}).items() if k != "images"}
         return {
-
-            **chunk_result,
-
-            "embeddings_generated": len(embedding_results)
-
+            **sanitized,
+            "embeddings_generated": embeddings_generated,
         }
 
-        
-
     except Exception as e:
-
         logger.error(f"Embedding generation failed: {str(e)}")
-
         raise
-
-
-
 
 
 @celery_app.task(
@@ -1164,6 +1151,12 @@ def _extract_entities_v2(
 
             continue
 
+        # Collect mention contexts for this entity (up to 3 examples)
+        mention_contexts = []
+        for mention in evidence_map.get(cid, [])[:3]:
+            if hasattr(mention, 'context') and mention.context:
+                mention_contexts.append(mention.context)
+
         entity_inputs.append({
 
             "id": cid,
@@ -1177,6 +1170,8 @@ def _extract_entities_v2(
             "aliases": row.get("aliases") or [],
 
             "metadata": row.get("metadata") or {},
+
+            "contexts": mention_contexts,  # Add mention contexts
 
         })
 
@@ -1218,7 +1213,13 @@ def _extract_entities_v2(
 
     relationships_raw = []
 
+    # DEBUG: Log condition values for relationship extraction
+    logger.warning(f"[REL-CHECK] entity_inputs length: {len(entity_inputs)}, full_text length: {len(full_text)}, full_text.strip() length: {len(full_text.strip())}")
+    logger.warning(f"[REL-CHECK] Condition check: entity_inputs={bool(entity_inputs)}, full_text.strip()={bool(full_text.strip())}")
+
     if entity_inputs and full_text.strip():
+
+        logger.warning(f"[REL-START] Starting relationship extraction with {len(entity_inputs)} entities")
 
         relationship_extractor = RelationshipExtractor()
 
@@ -1268,13 +1269,15 @@ def _extract_entities_v2(
 
         except Exception as rel_err:
 
-            logger.warning(f"Relationship extraction failed for document {document_id}: {rel_err}")
+            logger.warning(f"[REL-ERROR] Relationship extraction failed for document {document_id}: {rel_err}")
 
             relationships_raw = []
 
     else:
 
-        logger.info(f"Skipping relationship extraction for document {document_id} (insufficient canonical entities or text)")
+        logger.warning(f"[REL-SKIP] Skipping relationship extraction for document {document_id} - entity_inputs: {len(entity_inputs)}, full_text: {len(full_text)}")
+
+    logger.warning(f"[REL-RESULT] Relationship extraction complete: {len(relationships_raw)} raw relationships returned")
 
 
 
@@ -1303,7 +1306,7 @@ def _extract_entities_v2(
     canonical_relationships: List[CanonicalRelationship] = []
 
     if relationships_raw:
-
+        logger.warning(f"[REL-CANON] Processing {len(relationships_raw)} relationships. Available canonical mapping keys: {list(name_to_canonical.keys())[:20]}")
         dedup_map: Dict[tuple[str, str, str], CanonicalRelationship] = {}
 
         for rel in relationships_raw:
@@ -1320,12 +1323,29 @@ def _extract_entities_v2(
 
             canonical_type = canonicalize_relationship_type(raw_label)
 
-            source_id = _resolve_canonical(getattr(rel, "source_entity", None))
+            # The relationship extractor returns entity IDs in source_entity/target_entity fields
+            # These are already canonical UUIDs, not names
+            source_id = getattr(rel, "source_entity", None)
+            target_id = getattr(rel, "target_entity", None)
 
-            target_id = _resolve_canonical(getattr(rel, "target_entity", None))
+            # Get names from properties for logging (stored during extraction)
+            props = getattr(rel, "properties", None)
+            additional_props = getattr(props, "additional_properties", {}) if props else {}
+            source_name_log = additional_props.get("source_name", source_id)
+            target_name_log = additional_props.get("target_name", target_id)
 
+            # Validate IDs exist and are valid UUIDs (skip invalid entries)
             if not source_id or not target_id or source_id == target_id:
+                logger.warning(f"[REL-FILTER] Skipping relationship: source_id='{source_id}' (name={source_name_log}), target_id='{target_id}' (name={target_name_log}), type={canonical_type}, reason=missing_or_equal")
+                continue
 
+            # Validate UUIDs - skip if either is not a valid UUID format
+            try:
+                from uuid import UUID
+                UUID(str(source_id))
+                UUID(str(target_id))
+            except (ValueError, AttributeError) as e:
+                logger.warning(f"[REL-FILTER] Skipping relationship: source_id='{source_id}' (name={source_name_log}), target_id='{target_id}' (name={target_name_log}), type={canonical_type}, reason=invalid_uuid")
                 continue
 
             properties = getattr(rel, "properties", None)
@@ -1354,11 +1374,11 @@ def _extract_entities_v2(
 
                 "document_id": document_id,
 
-                "source_name": getattr(rel, "source_entity", None),
+                "source_name": source_name_log,  # Use name from properties (stored during extraction)
 
                 "source_type": getattr(rel, "source_type", None),
 
-                "target_name": getattr(rel, "target_entity", None),
+                "target_name": target_name_log,  # Use name from properties (stored during extraction)
 
                 "target_type": getattr(rel, "target_type", None),
 
@@ -1564,3 +1584,154 @@ def _extract_entities_v2(
 
 
 
+@celery_app.task(
+    bind=True,
+    base=DocumentTask,
+    name="publish_approved_document",
+    autoretry_for=(Exception,),
+    retry_kwargs={'max_retries': 3, 'countdown': 120},
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True
+)
+def publish_approved_document(self, document_id: str) -> Dict[str, Any]:
+    """Publish an approved document to downstream vector and graph stores."""
+    logger.info("Publishing approved document %s", document_id)
+
+    supabase = self.supabase
+    document = supabase.get_document(document_id)
+
+    if not document:
+        logger.error("Document %s not found while attempting to publish", document_id)
+        return {"document_id": document_id, "status": "not_found"}
+
+    attempt = (document.publish_attempts or 0) + 1
+
+    def _run_async(coro):
+        try:
+            return asyncio.run(coro)
+        except RuntimeError as runtime_err:
+            if "asyncio.run" in str(runtime_err):
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    return loop.run_until_complete(coro)
+                finally:
+                    asyncio.set_event_loop(None)
+                    loop.close()
+            raise
+
+    def _ensure_embeddings(chunks: List[Chunk]) -> int:
+        missing = [chunk for chunk in chunks if not getattr(chunk, 'embedding_vector', None)]
+        if not missing:
+            return 0
+        if not settings.openai_api_key:
+            logger.warning("OPENAI_API_KEY not configured; cannot backfill embeddings for %s", document_id)
+            return 0
+        try:
+            embedding_service = EmbeddingService()
+
+            async def _embed_missing() -> List[EmbeddingResult]:
+                texts = [chunk.chunk_text for chunk in missing]
+                return await embedding_service.embed_batch(texts, batch_size=100)
+
+            results = _run_async(_embed_missing())
+            now_iso = datetime.utcnow().isoformat()
+            generated = 0
+            for chunk, result in zip(missing, results):
+                supabase.update_chunk(chunk.id, {
+                    "embedding_vector": result.embedding,
+                    "embedding_model": result.model,
+                    "embedding_dimensions": result.dimensions,
+                    "embedded_at": now_iso,
+                })
+                chunk.embedding_vector = result.embedding
+                chunk.embedding_model = result.model
+                chunk.embedding_dimensions = result.dimensions
+                generated += 1
+            return generated
+        except Exception as embed_err:
+            logger.error("Failed to backfill embeddings for %s: %s", document_id, embed_err)
+            raise
+
+    publish_updates = {
+        "status": DocumentState.PUBLISHING.value,
+        "publish_attempts": attempt,
+        "last_publish_error": None,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    try:
+        supabase.update_document(document_id, publish_updates)
+    except Exception as update_err:
+        logger.warning("Failed to set publishing state for %s: %s", document_id, update_err)
+
+    try:
+        chunks = supabase.get_document_chunks(document_id)
+        embeddings_generated = _ensure_embeddings(chunks) if chunks else 0
+
+        qdrant_points = 0
+        if settings.qdrant_url:
+            try:
+                qdrant_service = QdrantService()
+                qdrant_points = _run_async(qdrant_service.store_document_embeddings(document_id, chunks or []))
+            except Exception as qdrant_err:
+                logger.error("Failed to publish embeddings to Qdrant for %s: %s", document_id, qdrant_err)
+                raise
+        else:
+            logger.info("Qdrant is not configured; skipping vector publish for %s", document_id)
+
+        graph_result: Dict[str, int] = {"entities": 0, "relationships": 0}
+        if settings.neo4j_uri:
+            try:
+                neo4j_service = Neo4jService()
+                graph_result = _run_async(neo4j_service.store_document_graph(document_id))
+            except Exception as neo4j_err:
+                logger.error("Failed to publish graph data to Neo4j for %s: %s", document_id, neo4j_err)
+                raise
+        else:
+            logger.info("Neo4j is not configured; skipping graph publish for %s", document_id)
+
+        metadata = dict(document.metadata or {})
+        publishing_info = dict(metadata.get("publishing") or {})
+        published_at = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+        publishing_info.update({
+            "last_published_at": published_at,
+            "qdrant_points": qdrant_points,
+            "neo4j_entities": graph_result.get("entities", 0),
+            "neo4j_relationships": graph_result.get("relationships", 0),
+            "embeddings_generated": embeddings_generated,
+        })
+        metadata["publishing"] = publishing_info
+
+        supabase.update_document(document_id, {
+            "status": DocumentState.PUBLISHED.value,
+            "published_at": published_at,
+            "metadata": metadata,
+            "last_publish_error": None,
+            "updated_at": datetime.utcnow().isoformat(),
+        })
+
+        logger.info(
+            "Published document %s to Qdrant (points=%d) and Neo4j (entities=%d, relationships=%d)",
+            document_id,
+            qdrant_points,
+            graph_result.get("entities", 0),
+            graph_result.get("relationships", 0),
+        )
+
+        return {
+            "document_id": document_id,
+            "qdrant_points": qdrant_points,
+            "neo4j_entities": graph_result.get("entities", 0),
+            "neo4j_relationships": graph_result.get("relationships", 0),
+            "embeddings_generated": embeddings_generated,
+        }
+
+    except Exception as publish_error:
+        logger.error("Publishing pipeline failed for %s: %s", document_id, publish_error)
+        supabase.update_document(document_id, {
+            "status": DocumentState.PUBLISH_FAILED.value,
+            "last_publish_error": str(publish_error),
+            "updated_at": datetime.utcnow().isoformat(),
+        })
+        raise

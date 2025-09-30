@@ -358,18 +358,29 @@ class RelationshipExtractor:
             desc = f"- {rel_type.label}: {', '.join(rel_type.suggested_properties.keys())}"
             rel_descriptions.append(desc)
         
-        # Provide the LLM with entities including IDs and instruct it to return IDs
-        entity_list = [
-            {"id": e.get("id"), "name": e.get("name"), "type": e.get("type"), "aliases": e.get("aliases", [])}
-            for e in (entities or [])
-        ]
+        # Provide the LLM with entities including IDs, contexts, and instruct it to return IDs
+        entity_list = []
+        for e in (entities or []):
+            entity_dict = {
+                "id": e.get("id"),
+                "name": e.get("name"),
+                "type": e.get("type"),
+                "aliases": e.get("aliases", [])
+            }
+            # Include mention contexts if available
+            contexts = e.get("contexts", [])
+            if contexts:
+                entity_dict["mention_contexts"] = contexts[:3]  # Limit to 3 examples
+            entity_list.append(entity_dict)
 
         prompt = f"""
 You are analyzing documentation for a smart water dispenser company.
 {doc_context}
 
 Extract ALL relationships between the following entities (each has a stable canonical "id").
-Use only these entities; do not invent new entities. Refer to entities by their "id" in outputs:
+Use only these entities; do not invent new entities. Refer to entities by their "id" in outputs.
+
+Each entity includes up to 3 "mention_contexts" showing where it appears in the document:
 {json.dumps(entity_list, indent=2)}
 
 Use these relationship types:
@@ -430,8 +441,14 @@ Focus on:
 - Component hierarchies and compatibility relationships
 - Functional co-dependencies and interaction patterns
 
-Text to analyze:
-{text[:15000]}
+Analysis approach:
+1. Use the "mention_contexts" for each entity to see where they appear together
+2. Use the full document text below to understand broader relationships
+3. Look for entities that appear in similar contexts or sections
+4. Infer relationships from functional proximity and co-occurrence patterns
+
+Full document text:
+{text}
 
 Return as JSON:
 {{
