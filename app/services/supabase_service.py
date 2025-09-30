@@ -167,6 +167,30 @@ class SupabaseService:
         """Get all chunks for a document"""
         result = self.client.table("chunks").select("*").eq("document_id", document_id).order("chunk_index").execute()
         return [Chunk(**chunk) for chunk in result.data]
+
+    def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Chunk]:
+        """Get specific chunks by their IDs, sorted by chunk_index when available.
+
+        This avoids accidentally picking up pre-existing chunks from other runs.
+        """
+        ids = [str(cid) for cid in (chunk_ids or []) if cid]
+        if not ids:
+            return []
+        resp = (
+            self.client
+            .table("chunks")
+            .select("*")
+            .in_("id", ids)
+            .execute()
+        )
+        rows = resp.data or []
+        # Sort by chunk_index if present; stable sort keeps relative order otherwise
+        try:
+            rows.sort(key=lambda r: (r.get("chunk_index") is None, r.get("chunk_index", 0)))
+        except Exception:
+            # Fallback: no-op sort if fields missing
+            pass
+        return [Chunk(**row) for row in rows]
     
     def update_chunk(self, chunk_id: str, updates: Dict[str, Any]) -> Chunk:
         """Update a chunk"""
@@ -286,28 +310,79 @@ class SupabaseService:
         self.client.table("extraction_runs").update(updates).eq("id", run_id).execute()
 
     def insert_entity_mentions(self, mentions: list[EntityMention], extraction_run_id: str) -> int:
-        """Batch insert entity mentions. Returns number inserted."""
-        rows = []
-        for m in mentions:
+        """Batch insert entity mentions with dedup + upsert.
+
+        - Deduplicates within the batch on (document_id, chunk_id, text, start_offset, end_offset)
+        - Uses upsert on the same composite key to avoid constraint violations from concurrent runs
+        Returns number of rows affected (inserted or updated)
+        """
+        # Prepare rows and deduplicate within this batch
+        seen: set[tuple[str, str | None, str, int, int]] = set()
+        rows: list[dict[str, Any]] = []
+        for m in mentions or []:
+            doc_id = str(m.document_id) if m and getattr(m, 'document_id', None) else None
+            chunk_id = str(m.chunk_id) if m and getattr(m, 'chunk_id', None) else None
+            text = (m.text or '').strip() if m else ''
+            try:
+                start = int(getattr(m, 'start_offset', 0) or 0)
+            except Exception:
+                start = 0
+            try:
+                end = int(getattr(m, 'end_offset', 0) or 0)
+            except Exception:
+                end = start + (len(text) if text else 0)
+
+            if not doc_id or not chunk_id or not text:
+                continue
+
+            key = (doc_id, chunk_id, text.lower(), start, end)
+            if key in seen:
+                continue
+            seen.add(key)
+
             row = {
-                "document_id": m.document_id,
-                "chunk_id": m.chunk_id,
+                "document_id": doc_id,
+                "chunk_id": chunk_id,
                 "extraction_run_id": extraction_run_id,
-                "text": m.text,
-                "type": m.type,
-                "start_offset": m.start_offset,
-                "end_offset": m.end_offset,
-                "confidence": m.confidence,
-                "context": m.context,
-                "attributes": m.attributes or {},
-                "canonical_entity_id": m.canonical_entity_id,
-                "canonicalization_score": m.canonicalization_score,
+                "text": text,
+                "type": (m.type or '').strip().upper() if getattr(m, 'type', None) else 'CONCEPT',
+                "start_offset": start,
+                "end_offset": end,
+                "confidence": float(getattr(m, 'confidence', 0.0) or 0.0),
+                "context": getattr(m, 'context', None) or '',
+                "attributes": getattr(m, 'attributes', None) or {},
+                "canonical_entity_id": getattr(m, 'canonical_entity_id', None),
+                "canonicalization_score": getattr(m, 'canonicalization_score', None),
             }
             rows.append(row)
+
         if not rows:
             return 0
-        result = self.client.table("entity_mentions").insert(rows).execute()
-        return len(result.data or [])
+
+        # Attempt idempotent upsert to avoid unique constraint violations. Fall back to insert.
+        try:
+            # Composite key matching the actual database constraint
+            # DB constraint: (document_id, chunk_id, start_offset, end_offset, extraction_run_id)
+            on_conflict = "document_id,chunk_id,start_offset,end_offset,extraction_run_id"
+            req = self.client.table("entity_mentions")
+            if hasattr(req, 'upsert'):
+                result = req.upsert(rows, on_conflict=on_conflict).execute()
+            else:
+                # Older clients may not support upsert; delete by document first as a safety net
+                try:
+                    self.client.table("entity_mentions").delete().eq("document_id", rows[0]["document_id"]).execute()
+                except Exception:
+                    pass
+                result = req.insert(rows).execute()
+            return int(len(result.data or []) or 0)
+        except Exception as exc:  # pragma: no cover - network call safeguard
+            logger.warning("Upsert mentions failed, attempting insert after cleanup: %s", exc)
+            try:
+                self.client.table("entity_mentions").delete().eq("document_id", rows[0]["document_id"]).execute()
+            except Exception:
+                pass
+            result = self.client.table("entity_mentions").insert(rows).execute()
+            return len(result.data or [])
 
     def get_canonical_entity(self, name: str, type_: str) -> dict | None:
         """Fetch a canonical entity by name/type, tolerating differences in type casing."""
@@ -401,8 +476,27 @@ class SupabaseService:
             ce_type = ce_type_raw.strip().upper()
             key_name = ce_name.lower()
 
+            # Canonical reuse guard: if a validated canonical exists with same name (any type), reuse it
+            existing_validated = None
+            try:
+                ev = (
+                    self.client
+                    .table("canonical_entities")
+                    .select("*")
+                    .eq("name", ce_name)
+                    .eq("is_validated", True)
+                    .limit(1)
+                    .execute()
+                )
+                if ev.data:
+                    existing_validated = ev.data[0]
+            except Exception:
+                existing_validated = None
+
             existing = self.get_canonical_entity(ce_name, ce_type)
-            if existing:
+            if existing_validated:
+                cid = existing_validated.get("id")
+            elif existing:
                 cid = existing["id"]
             else:
                 payload = {
@@ -428,12 +522,25 @@ class SupabaseService:
                 (key_name, ce_type),
                 (key_name, ce_type.lower()),
             }
+            # If we reused an existing validated canonical with a different type,
+            # also map that type so mentions with that type resolve correctly
+            if existing_validated:
+                ev_type = str(existing_validated.get("type") or "").strip()
+                if ev_type:
+                    base_keys.add((key_name, ev_type.upper()))
+                    base_keys.add((key_name, ev_type.lower()))
             for mapping_key in base_keys:
                 mapping[mapping_key] = cid
 
             typed_alias = f"{ce_name} ({ce_type})".lower()
             mapping[(typed_alias, ce_type)] = cid
             mapping[(typed_alias, ce_type.lower())] = cid
+            if existing_validated:
+                ev_type = str(existing_validated.get("type") or "").strip().upper()
+                if ev_type:
+                    ev_alias = f"{ce_name} ({ev_type})".lower()
+                    mapping[(ev_alias, ev_type)] = cid
+                    mapping[(ev_alias, ev_type.lower())] = cid
 
             if ce.aliases:
                 for alias in ce.aliases:
@@ -489,6 +596,7 @@ class SupabaseService:
     def get_document_relationships(self, document_id: str) -> list[Dict[str, Any]]:
         """Fetch canonical relationships associated with a specific document."""
         try:
+            # Primary: relationships explicitly tagged to this document via metadata.document_id
             response = (
                 self.client
                 .table("canonical_relationships")
@@ -496,10 +604,65 @@ class SupabaseService:
                 .contains("metadata", {"document_id": str(document_id)})
                 .execute()
             )
+            rows = response.data or []
+
+            if rows:
+                return rows
+
+            # Fallback: if none are tagged, derive by membership (entities mentioned in this document)
+            mentions = (
+                self.client
+                .table("entity_mentions")
+                .select("canonical_entity_id")
+                .eq("document_id", str(document_id))
+                .not_.is_("canonical_entity_id", "null")
+                .execute()
+            )
+            ids = sorted({m.get("canonical_entity_id") for m in (mentions.data or []) if m.get("canonical_entity_id")})
+            if not ids:
+                return []
+
+            src_rels = (
+                self.client
+                .table("canonical_relationships")
+                .select("*")
+                .in_("source_entity_id", ids)
+                .execute()
+            )
+            tgt_rels = (
+                self.client
+                .table("canonical_relationships")
+                .select("*")
+                .in_("target_entity_id", ids)
+                .execute()
+            )
+
+            combined = (src_rels.data or []) + (tgt_rels.data or [])
+            if not combined:
+                return []
+
+            # Prefer relationships where both ends appear in this document's canonical ids
+            idset = set(ids)
+            filtered: list[Dict[str, Any]] = []
+            for r in combined:
+                if (r.get("source_entity_id") in idset) or (r.get("target_entity_id") in idset):
+                    filtered.append(r)
+
+            # Attach document_id into metadata if missing (for consistent downstream behavior)
+            for r in filtered:
+                meta = r.get("metadata") or {}
+                try:
+                    if isinstance(meta, dict) and not meta.get("document_id"):
+                        meta = dict(meta)
+                        meta["document_id"] = str(document_id)
+                        r["metadata"] = meta
+                except Exception:
+                    pass
+
+            return filtered
         except Exception as exc:  # pragma: no cover - network call safeguard
             logger.error("Failed to fetch relationships for document %s: %s", document_id, exc)
             raise
-        return response.data or []
 
     def create_document_relationship(
         self,
@@ -519,6 +682,21 @@ class SupabaseService:
         For auto-generated relationships (is_manual=False), we store document_id
         so they get cleaned up on reprocessing.
         """
+        # Verify entities exist
+        try:
+            source_check = self.client.table("canonical_entities").select("id").eq("id", source_entity_id).execute()
+            if not source_check.data:
+                raise ValueError(f"Source entity {source_entity_id} not found in canonical_entities")
+
+            target_check = self.client.table("canonical_entities").select("id").eq("id", target_entity_id).execute()
+            if not target_check.data:
+                raise ValueError(f"Target entity {target_entity_id} not found in canonical_entities")
+        except ValueError:
+            raise
+        except Exception as exc:
+            logger.error(f"Error checking entities: {exc}")
+            raise ValueError(f"Failed to verify entities exist: {exc}")
+
         payload_metadata: Dict[str, Any] = dict(metadata or {})
 
         if is_manual:
@@ -537,7 +715,7 @@ class SupabaseService:
             "relationship_type": relationship_type,
             "confidence_score": confidence_score,
             "metadata": payload_metadata,
-            "is_verified": is_manual,  # Manual relationships are pre-verified
+            # Note: is_verified column doesn't exist in canonical_relationships table
         }
 
         try:
@@ -549,6 +727,7 @@ class SupabaseService:
             )
         except Exception as exc:  # pragma: no cover - network call safeguard
             logger.error("Failed to create relationship for document %s: %s", document_id, exc)
+            logger.error(f"Relationship data: {record}")
             raise
 
         data = response.data or []
